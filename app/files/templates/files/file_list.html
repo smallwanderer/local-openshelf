@@ -1,6 +1,7 @@
 {% extends "files/base.html" %}
+{% load static %}
 
-{% block title %}파일 목록 | FileHub{% endblock %}
+{% block title %}파일 목록 | Openshelf{% endblock %}
 
 {% block extra_head %}
 {{ block.super }}
@@ -133,16 +134,7 @@
     justify-content: space-between;
   }
 
-  .card-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    flex-shrink: 0;
-  }
+  /* .card-icon dimensions moved to base.html */
 
   .card-star-btn {
     width: 28px;
@@ -956,15 +948,31 @@
       });
   }
 
+  const ICON_BASE = '{% static "assets/icons" %}';
+
+  function getFileIconSrc(name, mime) {
+    if (!name) return `${ICON_BASE}/other.svg`;
+    const extMatch = name.match(/\.([^\.]+)$/);
+    if (!extMatch) return `${ICON_BASE}/other.svg`;
+    const ext = extMatch[1].toLowerCase();
+    if (['pdf'].includes(ext)) return `${ICON_BASE}/file-p.svg`;
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext) || (mime && mime.includes('image'))) return `${ICON_BASE}/image.svg`;
+    if (['hwp', 'hwpx'].includes(ext)) return `${ICON_BASE}/hwp.svg`;
+    if (['doc', 'docx', 'txt', 'csv'].includes(ext)) return `${ICON_BASE}/doc.svg`;
+    return `${ICON_BASE}/other.svg`;
+  }
+
+  function getFolderIconSrc() { return `${ICON_BASE}/folder.svg`; }
+
   function getFileIconType(name, mime) {
     if (!name) return 'other';
     const extMatch = name.match(/\.([^\.]+)$/);
     if (!extMatch) return 'other';
     const ext = extMatch[1].toLowerCase();
-
-    if (['pdf'].includes(ext)) return 'pdf';
+    if (['pdf'].includes(ext)) return 'pdf-doc';
     if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext) || (mime && mime.includes('image'))) return 'image';
-    if (['doc', 'docx', 'txt', 'hwp', 'csv'].includes(ext)) return 'doc';
+    if (['hwp', 'hwpx'].includes(ext)) return 'hwp';
+    if (['doc', 'docx', 'txt', 'csv'].includes(ext)) return 'doc';
     return 'other';
   }
 
@@ -1038,9 +1046,24 @@
 
     aiContainer.innerHTML = '';
     results.forEach(res => {
-      // res.node_name, res.prompt_context, res.distance, res.node_id
-      const distance = parseFloat(res.distance || 0).toFixed(4);
-      const similarity = ((1 - res.distance) * 100).toFixed(1); // 대략적인 백분율
+      const docScore = parseFloat(res.doc_score || 0).toFixed(2);
+
+      let evidencesHtml = '';
+      if (res.evidences && Array.isArray(res.evidences)) {
+        res.evidences.forEach(ev => {
+          const sectionSnippet = ev.section ? ` - ${ev.section}` : '';
+          const pagesSnippet = ev.pages && ev.pages !== 'None' ? `[${ev.pages}p]` : '';
+          const safeText = ev.text ? ev.text.substring(0, 150) + (ev.text.length > 150 ? '...' : '') : '';
+          evidencesHtml += `
+            <div style="margin-bottom:6px; padding:8px; background:var(--bg); border-radius:6px; font-size:12px; color:var(--text);">
+              <span style="font-weight:600; color:var(--accent);">
+                ${pagesSnippet}${sectionSnippet}
+              </span>
+              ${safeText}
+            </div>
+          `;
+        });
+      }
 
       const card = document.createElement('div');
       card.className = 'ai-card';
@@ -1049,12 +1072,13 @@
           <a href="/files/${res.node_id}/" style="text-decoration: none; color: inherit;">
             📄 ${res.node_name}
           </a>
-          <span style="font-size: 11px; font-weight: normal; color: var(--muted);">유사도: ${similarity}% (Dist: ${distance})</span>
+          <span style="font-size: 11px; font-weight: normal; color: var(--muted);">Score: ${docScore}</span>
         </div>
-        <div class="ai-context">${res.prompt_context}</div>
-        <div class="ai-meta">
-          <span>문서 섹션: ${res.section || '알 수 없음'}</span>
-          <span>페이지: ${res.pages || '?'}</span>
+        <div class="ai-context" style="margin-top:8px; display:flex; flex-direction:column; gap:4px;">
+          ${evidencesHtml}
+        </div>
+        <div class="ai-meta" style="margin-top:6px;">
+          <span>${(res.file_ext || '문서').toUpperCase()}</span>
         </div>
       `;
       aiContainer.appendChild(card);
@@ -1125,13 +1149,7 @@
         const isDir = file.node_type === 'directory';
         const fileType = isDir ? 'folder' : getFileIconType(file.name, file.mime_type);
 
-        let iconEmoji = "📁";
-        if (!isDir) {
-          if (fileType === 'pdf') iconEmoji = "📄";
-          else if (fileType === 'image') iconEmoji = "🖼️";
-          else if (fileType === 'doc') iconEmoji = "📝";
-          else iconEmoji = "📄";
-        }
+        const iconSrc = isDir ? getFolderIconSrc() : getFileIconSrc(file.name, file.mime_type);
 
         const sizeStr = isDir ? '폴더' : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
@@ -1153,8 +1171,8 @@
         card.innerHTML = `
           <div class="card-top">
             <a href="${fileHref}" style="display:contents;">
-              <div class="card-icon icon-${fileType}">
-                ${iconEmoji}
+              <div class="card-icon">
+                <img src="${iconSrc}" alt="icon" style="width:100%;height:100%;object-fit:contain;">
               </div>
             </a>
             <button type="button" class="card-star-btn ${isStarred}" title="즐겨찾기" onclick="toggleStar('${file.uid}', event)">
@@ -1198,13 +1216,7 @@
         const isDir = file.node_type === 'directory';
         const fileType = isDir ? 'folder' : getFileIconType(file.name, file.mime_type);
 
-        let iconEmoji = "📁";
-        if (!isDir) {
-          if (fileType === 'pdf') iconEmoji = "📄";
-          else if (fileType === 'image') iconEmoji = "🖼️";
-          else if (fileType === 'doc') iconEmoji = "📝";
-          else iconEmoji = "📄"; // fallback
-        }
+        const iconSrc2 = isDir ? getFolderIconSrc() : getFileIconSrc(file.name, file.mime_type);
 
         const sizeStr = isDir ? '폴더' : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
@@ -1227,8 +1239,8 @@
           </td>
           <td>
             <a href="/files/${file.uid}/" class="file-name-cell">
-              <div class="file-type-icon icon-${fileType}">
-                ${iconEmoji}
+              <div class="file-type-icon">
+                <img src="${iconSrc2}" alt="icon" style="width:100%;height:100%;object-fit:contain;">
               </div>
               <span class="file-name-text">${file.name}</span>
             </a>

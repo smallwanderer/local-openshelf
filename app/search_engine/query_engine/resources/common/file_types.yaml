@@ -1,0 +1,15 @@
+pdf:
+  exts: [pdf]
+  mime_types: [application/pdf]
+
+excel:
+  exts: [xls, xlsx]
+  mime_types:
+    - application/vnd.ms-excel
+    - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+word:
+  exts: [doc, docx]
+  mime_types:
+    - application/msword
+    - application/vnd.openxmlformats-officedocument.wordprocessingml.document

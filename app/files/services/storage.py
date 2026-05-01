@@ -59,6 +59,15 @@ def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValid
             errors=["파일 크기가 제한을 초과했습니다."]
         )
 
+    # 저장 공간 할당량 체크
+    storage, _ = UserStorage.objects.get_or_create(user=owner)
+    if storage.used_size + uploaded_file.size > storage.total_size:
+        remaining_mb = round(storage.remaining_size / 1024 / 1024, 2)
+        return UploadValidationResult(
+            ok=False,
+            errors=[f"저장 공간이 부족합니다. (현재 잔여: {remaining_mb} MB)"]
+        )
+
     ext = os.path.splitext(uploaded_file.name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         return UploadValidationResult(

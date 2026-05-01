@@ -1,0 +1,41 @@
+# name 항목
+파일명: name
+이름: name
+
+# ext 항목
+확장자: ext
+형식: ext
+파일 타입: ext
+
+# size 항목
+크기: size
+용량: size
+
+# mime_type 항목
+mime: mime_type
+
+# state 항목
+상태: status
+
+# parser_name 항목
+파서: parser_name
+
+# chunk_count 항목
+청크 수: chunk_count
+
+# text 항목
+본문: text
+내용: text
+
+# page 항목
+페이지: page
+
+# path 항목
+경로: path
+
+# trahsed 항목
+휴지통: trashed
+쓰레기통: trahsed
+
+# email 항목
+이메일: email

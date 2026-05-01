@@ -1,0 +1,19 @@
+업로드됨:
+  scope: fileblob
+  value: uploaded
+
+업로드 완료:
+  scope: fileblob
+  value: uploaded
+
+파싱 완료:
+  scope: parse_result
+  value: success
+
+파싱 실패:
+  scope: parse_result
+  value: failed
+
+임베딩 완료:
+  scope: embedding
+  value: success

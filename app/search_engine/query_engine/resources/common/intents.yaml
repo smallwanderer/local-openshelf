@@ -1,0 +1,14 @@
+search:
+  value: search
+  description: Default search intent
+find:
+  value: search
+delete:
+  value: delete
+restore:
+  value: restore
+summarize:
+  value: summarize
+  description: Document AI summary intent
+translate:
+  value: translate

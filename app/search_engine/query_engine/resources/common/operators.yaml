@@ -1,0 +1,8 @@
+eq: { orm: exact }
+neq: { orm: exact, negate: true }
+lt: { orm: lt }
+lte: { orm: lte }
+gt: { orm: gt }
+gte: { orm: gte }
+contains: { orm: icontains }
+in: { orm: in }

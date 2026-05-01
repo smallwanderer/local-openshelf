@@ -84,6 +84,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'files.context_processors.storage_usage',
             ],
         },
     },
@@ -104,8 +105,8 @@ CELERY_TASK_TIME_LIMIT = 60 * 30
 DATABASES = {
     "default": {
         "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.postgresql"),
-        "NAME": os.getenv("POSTGRES_DB", "filehub"),
-        "USER": os.getenv("POSTGRES_USER", "filehub"),
+        "NAME": os.getenv("POSTGRES_DB", "openshelf"),
+        "USER": os.getenv("POSTGRES_USER", "openshelf"),
         "PASSWORD": os.getenv("POSTGRES_PASSWORD"),
         "HOST": os.getenv("POSTGRES_HOST", "db"),
         "PORT": os.getenv("POSTGRES_PORT", "5433"),
@@ -156,6 +157,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [
+    BASE_DIR / "static",
+]
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

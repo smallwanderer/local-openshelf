@@ -1,0 +1,9 @@
+search: search
+find: search
+delete: delete
+remove: delete
+restore: restore
+summary: summarize
+summarize: summarize
+translate: translate
+analyze: summarize

@@ -23,3 +23,9 @@ staticfiles/
 
 # Docker volume / runtime data
 data/
+
+# cache
+app/.cache/
+app/.cache/huggingface/
+*.pyc
+__pycache__/

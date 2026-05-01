@@ -1,0 +1,6 @@
+이하: lte
+미만: lt
+이상: gte
+초과: gt
+같은: eq
+포함: contains

@@ -176,6 +176,20 @@ def all_folders(request):
 
 @login_required
 @require_http_methods(["GET"])
+def get_storage_usage(request):
+    storage, _ = UserStorage.objects.get_or_create(user=request.user)
+    return JsonResponse({
+        "ok": True,
+        "used_size": storage.used_size,
+        "used_size_mb": storage.used_size_mb(),
+        "total_size": storage.total_size,
+        "total_size_gb": storage.total_size_gb(),
+        "usage_percent": storage.usage_percent,
+        "remaining_size": storage.remaining_size,
+    })
+
+@login_required
+@require_http_methods(["GET"])
 def file_download(request, uid):
     node = get_object_or_404(Node, uid=uid, owner=request.user, node_type=NodeType.FILE)
     if not hasattr(node, "blob") or not node.blob.file:

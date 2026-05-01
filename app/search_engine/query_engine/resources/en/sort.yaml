@@ -1,0 +1,21 @@
+newest first:
+  field: created_at
+  direction: desc
+latest first:
+  field: created_at
+  direction: desc
+oldest first:
+  field: created_at
+  direction: asc
+name a-z:
+  field: name
+  direction: asc
+name z-a:
+  field: name
+  direction: desc
+largest first:
+  field: size
+  direction: desc
+smallest first:
+  field: size
+  direction: asc

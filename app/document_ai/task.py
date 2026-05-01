@@ -6,7 +6,12 @@ from django.utils import timezone
 from django.db import transaction
 
 from document_ai.models import DocumentParseResult, DocumentChunk
-from document_ai.parsers.config import get_embedding_model, get_max_tokens
+from document_ai.parsers.config import (
+    get_chunk_max_tokens,
+    get_embedding_backend,
+    get_embedding_max_tokens,
+    get_embedding_model,
+)
 from document_ai.parsers.docling_parser import parse_document_entry, ParseResult
 from document_ai.parsers.text_utils import serialize_meta
 
@@ -23,7 +28,9 @@ def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:
     metadata = {
         "parser_version": pr.parser_version,
         "tokenizer_name": get_embedding_model(),
-        "max_tokens": get_max_tokens(),
+        "chunk_max_tokens": get_chunk_max_tokens(),
+        "embedding_max_tokens": get_embedding_max_tokens(),
+        "embedding_backend": get_embedding_backend(),
         "file_ext": pr.file_ext,
     }
 
@@ -162,7 +169,9 @@ def parse_document_with_docling(node_id: int) -> dict:
                 "errors": [{"message": str(e)}],
                 "metadata": {
                     "tokenizer_name": get_embedding_model(),
-                    "max_tokens": get_max_tokens(),
+                    "chunk_max_tokens": get_chunk_max_tokens(),
+                    "embedding_max_tokens": get_embedding_max_tokens(),
+                    "embedding_backend": get_embedding_backend(),
                 },
                 "parsed_at": timezone.now(),
             },
@@ -234,9 +243,10 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
     from django.utils import timezone
     from document_ai.models import DocumentChunk, ChunkEmbedding
     from config.enums import AIStatus
-    from document_ai.parsers.config import get_embedding_model
+    from document_ai.parsers.config import get_embedding_backend, get_embedding_model
 
     embedding_model = get_embedding_model()
+    embedding_backend = get_embedding_backend()
 
     try:
         chunk = DocumentChunk.objects.get(pk=chunk_id)
@@ -266,12 +276,13 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         vector = bge_m3_embedder(
             text=text,
             model_name=embedding_model,
+            backend=embedding_backend,
         )
 
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": vector,
                 "embedded_at": timezone.now(),
@@ -295,7 +306,7 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
                 "embedded_at": None,
@@ -344,7 +355,7 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
                 "embedded_at": None,
@@ -380,7 +391,7 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
                 "embedded_at": None,
