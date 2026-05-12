@@ -1,0 +1,28 @@
+name: Pytest Unit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env file
+        run: cp .env.example .env
+
+      - name: Build app image
+        run: docker compose build app
+
+      - name: Run unit tests
+        run: docker compose run --rm app python -m pytest -m "unit"
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans

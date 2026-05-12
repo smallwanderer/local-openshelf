@@ -25,7 +25,16 @@ staticfiles/
 data/
 
 # cache
+.pytest_cache/
+pytest-cache-files-*/
 app/.cache/
 app/.cache/huggingface/
+app/.pytest_cache/
+app/pytest-cache-files-*/
 *.pyc
 __pycache__/
+
+# local scratch / ad-hoc outputs
+response.json
+scratch.py
+app/tmp_*.js
