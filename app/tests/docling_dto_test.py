@@ -1,9 +1,9 @@
-import os
-
 import pytest
 from types import SimpleNamespace
 
 from document_ai.parsers.docling_parser import _parse_docling_document, ParseResult
+
+pytestmark = pytest.mark.unit
 
 
 class FakeTokenizer:
@@ -122,7 +122,8 @@ def test_parse_docling_document_returns_parse_result(mock_dependencies):
     assert dto.py_impl_version == "cpython"
     assert dto.py_lang_version == "3.12"
 
-    assert dto.detected_language == "ko"
+    assert dto.detected_language is None
+    assert dto.document == {}
     assert dto.page_count == 2
     assert dto.pages == [{"page_no": 1}, {"page_no": 2}]
     assert dto.errors == [{"component_type": "OCR", "error_message": "minor warning"}]
@@ -219,6 +220,68 @@ def test_parse_document_string(mock_dependencies, monkeypatch):
     assert dto.parser_mode == "convert_string_md"
     assert dto.file_ext == ".md"
     assert dto.input_format == "md"
+
+
+def test_parse_document_hwp_wraps_extracted_text_as_markdown(mock_dependencies, monkeypatch):
+    from document_ai.parsers import docling_parser
+
+    monkeypatch.setattr(
+        docling_parser,
+        "convert_hwp_to_txt",
+        lambda file_path: "Converted HWP body",
+    )
+    monkeypatch.setattr(
+        docling_parser,
+        "convert_to_markdown",
+        lambda value: (_ for _ in ()).throw(AssertionError("convert_to_markdown should not be used for raw HWP text")),
+    )
+
+    captured = {}
+
+    class MockConverter:
+        def convert_string(self, content, format, name):
+            captured["content"] = content
+            captured["format"] = format
+            captured["name"] = name
+            result = FakeResult()
+            result.input.format = "md"
+            return result
+
+    monkeypatch.setattr(docling_parser, "get_converter", lambda: MockConverter())
+
+    dto = docling_parser.parse_document_hwp("/tmp/sample.hwp")
+
+    assert dto.parser_mode == "convert_string_md"
+    assert dto.file_ext == ".hwp"
+    assert dto.input_format == "md"
+    assert captured["name"] == "sample.hwp"
+    assert captured["content"] == "# Document: sample.hwp\n\nConverted HWP body"
+
+
+def test_parse_docling_document_normalizes_chunk_whitespace(monkeypatch):
+    from document_ai.parsers import docling_parser
+
+    monkeypatch.setattr(docling_parser, "get_hf_tokenizer", lambda: FakeTokenizer())
+
+    class WhitespaceChunker(FakeChunker):
+        def contextualize(self, chunk):
+            return "  first\t\tline  \n\n\n second   line \u00a0  "
+
+    monkeypatch.setattr(
+        docling_parser,
+        "get_hybrid_hf_chunker",
+        lambda serializer_provider=None: WhitespaceChunker(),
+    )
+    monkeypatch.setattr(docling_parser, "serialize_meta", lambda meta: meta)
+
+    dto = _parse_docling_document(
+        result=FakeResult(),
+        file_path="/tmp/sample.pdf",
+        parser_mode="convert",
+    )
+
+    assert dto.chunks[0].serialized_text == "first line\n\nsecond line"
+    assert dto.chunks[0].tokens == 4
 
 
 if __name__ == "__main__":

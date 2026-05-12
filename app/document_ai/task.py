@@ -1,18 +1,160 @@
-# 분산 비동기 작업 기능을 모아놓는 곳
 import logging
+import os
+from datetime import timedelta
 
 from celery import shared_task
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Count, Exists, F, OuterRef, Q
 
-from document_ai.models import DocumentParseResult, DocumentChunk
-from document_ai.parsers.config import get_embedding_model, get_max_tokens
+from document_ai.models import ChunkEmbedding, DocumentParseResult, DocumentChunk
+from document_ai.parsers.config import (
+    get_chunk_max_tokens,
+    get_embedding_backend,
+    get_embedding_max_tokens,
+    get_embedding_model,
+)
 from document_ai.parsers.docling_parser import parse_document_entry, ParseResult
-from document_ai.parsers.text_utils import serialize_meta
+from document_ai.parsers.text_utils import normalize_extracted_text, serialize_meta
 
 from config.enums import AIStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r, falling back to %s", name, raw_value, default)
+        return default
+
+    if value < 1:
+        logger.warning("%s must be >= 1, falling back to %s", name, default)
+        return default
+
+    return value
+
+
+def _get_recovery_stale_minutes() -> int:
+    return _get_positive_int_env("DOCUMENT_AI_RECOVERY_STALE_MINUTES", 30)
+
+
+def _get_recovery_parse_batch_size() -> int:
+    return _get_positive_int_env("DOCUMENT_AI_RECOVERY_PARSE_BATCH_SIZE", 50)
+
+
+def _get_recovery_embedding_batch_size() -> int:
+    return _get_positive_int_env("DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE", 200)
+
+
+def _recovery_cutoff():
+    return timezone.now() - timedelta(minutes=_get_recovery_stale_minutes())
+
+
+def _get_parse_recovery_node_ids(limit: int) -> list[int]:
+    from files.models import Node
+
+    cutoff = _recovery_cutoff()
+    node_ids = set(
+        Node.objects.select_related("blob", "parse_result")
+        .filter(
+            node_type="file",
+            trashed=False,
+            blob__isnull=False,
+        )
+        .filter(
+            Q(parse_result__isnull=True)
+            | Q(parse_result__status=AIStatus.FAILED, parse_result__updated_at__lte=cutoff)
+            | Q(parse_result__status=AIStatus.PENDING, parse_result__updated_at__lte=cutoff)
+            | Q(parse_result__status=AIStatus.PROCESSING, parse_result__updated_at__lte=cutoff)
+        )
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+    chunk_gap_ids = DocumentParseResult.objects.filter(
+        node__trashed=False,
+        node__blob__isnull=False,
+        status=AIStatus.COMPLETED,
+    ).annotate(
+        actual_chunk_rows=Count("chunks", distinct=True),
+    ).filter(
+        Q(chunk_count=0)
+        | Q(actual_chunk_rows=0)
+        | Q(actual_chunk_rows__lt=F("chunk_count"))
+    ).values_list("node_id", flat=True)
+    node_ids.update(chunk_gap_ids)
+    return sorted(node_ids)[:limit]
+
+
+def _get_embedding_recovery_chunk_ids(limit: int) -> list[int]:
+    cutoff = _recovery_cutoff()
+    backend = get_embedding_backend()
+    model_name = get_embedding_model()
+
+    existing_embedding_qs = ChunkEmbedding.objects.filter(
+        chunk_id=OuterRef("pk"),
+        model_name=model_name,
+        model_version=backend,
+        status=AIStatus.COMPLETED,
+    )
+    chunk_qs = (
+        DocumentChunk.objects.select_related("parse_result", "parse_result__node")
+        .annotate(
+            has_completed_embedding=Exists(existing_embedding_qs),
+        )
+        .filter(
+            parse_result__node__trashed=False,
+            parse_result__status=AIStatus.COMPLETED,
+        )
+        .filter(
+            Q(status=AIStatus.PENDING, created_at__lte=cutoff)
+            | Q(status=AIStatus.FAILED, created_at__lte=cutoff)
+            | Q(status=AIStatus.PROCESSING, created_at__lte=cutoff)
+        )
+        .filter(has_completed_embedding=False)
+        .order_by("id")
+    )
+    return list(chunk_qs.values_list("id", flat=True)[:limit])
+
+
+def _reset_chunks_to_pending(chunk_ids: list[int]) -> int:
+    if not chunk_ids:
+        return 0
+    return DocumentChunk.objects.filter(id__in=chunk_ids).exclude(status=AIStatus.PENDING).update(
+        status=AIStatus.PENDING,
+        error_message={},
+    )
+
+
+@shared_task(queue="parse")
+def recover_document_pipeline_backlog() -> dict:
+    parse_limit = _get_recovery_parse_batch_size()
+    embed_limit = _get_recovery_embedding_batch_size()
+
+    parse_node_ids = _get_parse_recovery_node_ids(parse_limit)
+    recovered_parse_count = 0
+    for node_id in parse_node_ids:
+        parse_document_with_docling.delay(node_id)
+        recovered_parse_count += 1
+
+    chunk_ids = _get_embedding_recovery_chunk_ids(embed_limit)
+    reset_count = _reset_chunks_to_pending(chunk_ids)
+    recovered_embed_count = 0
+    for chunk_id in chunk_ids:
+        embedding_document_with_bge.apply_async(args=[chunk_id], queue="embed")
+        recovered_embed_count += 1
+
+    summary = {
+        "status": "success",
+        "parse_requeued": recovered_parse_count,
+        "embedding_requeued": recovered_embed_count,
+        "chunks_reset_to_pending": reset_count,
+        "stale_minutes": _get_recovery_stale_minutes(),
+    }
+    logger.info("Recovered document pipeline backlog: %s", summary)
+    return summary
 
 
 def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:
@@ -23,7 +165,9 @@ def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:
     metadata = {
         "parser_version": pr.parser_version,
         "tokenizer_name": get_embedding_model(),
-        "max_tokens": get_max_tokens(),
+        "chunk_max_tokens": get_chunk_max_tokens(),
+        "embedding_max_tokens": get_embedding_max_tokens(),
+        "embedding_backend": get_embedding_backend(),
         "file_ext": pr.file_ext,
     }
 
@@ -67,11 +211,13 @@ def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:
 
             serialized_meta = serialize_meta(raw_meta) or {}
 
+            normalized_text = normalize_extracted_text(chunk.serialized_text)
+
             chunk_objects.append(
                 DocumentChunk(
                     parse_result=doc_result,
                     chunk_index=chunk.chunk_index,
-                    text=chunk.serialized_text,
+                    text=normalized_text,
                     token_count=chunk.tokens,
                     section_title=_extract_section_title(raw_meta),
                     page_from=_extract_page(raw_meta, "page_from"),
@@ -162,7 +308,9 @@ def parse_document_with_docling(node_id: int) -> dict:
                 "errors": [{"message": str(e)}],
                 "metadata": {
                     "tokenizer_name": get_embedding_model(),
-                    "max_tokens": get_max_tokens(),
+                    "chunk_max_tokens": get_chunk_max_tokens(),
+                    "embedding_max_tokens": get_embedding_max_tokens(),
+                    "embedding_backend": get_embedding_backend(),
                 },
                 "parsed_at": timezone.now(),
             },
@@ -234,9 +382,10 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
     from django.utils import timezone
     from document_ai.models import DocumentChunk, ChunkEmbedding
     from config.enums import AIStatus
-    from document_ai.parsers.config import get_embedding_model
+    from document_ai.parsers.config import get_embedding_backend, get_embedding_model
 
     embedding_model = get_embedding_model()
+    embedding_backend = get_embedding_backend()
 
     try:
         chunk = DocumentChunk.objects.get(pk=chunk_id)
@@ -257,23 +406,25 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         }
 
     try:
-        text = (chunk.text or "").strip()
+        text = normalize_extracted_text(chunk.text or "")
         if not text:
             raise ValueError("Chunk text is empty")
 
         from document_ai.embedding.embeding_models import bge_m3_embedder
 
-        vector = bge_m3_embedder(
+        embedding = bge_m3_embedder(
             text=text,
             model_name=embedding_model,
+            backend=embedding_backend,
         )
 
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
-                "vector": vector,
+                "vector": embedding.dense_vector,
+                "sparse_vector": embedding.sparse_vector,
                 "embedded_at": timezone.now(),
                 "status": AIStatus.COMPLETED,
                 "error_message": "",
@@ -295,9 +446,10 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
+                "sparse_vector": {},
                 "embedded_at": None,
                 "status": AIStatus.FAILED,
                 "error_message": str(e),
@@ -344,9 +496,10 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
+                "sparse_vector": {},
                 "embedded_at": None,
                 "status": AIStatus.FAILED,
                 "error_message": error_message,
@@ -380,9 +533,10 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         ChunkEmbedding.objects.update_or_create(
             chunk=chunk,
             model_name=embedding_model,
-            model_version="",
+            model_version=embedding_backend,
             defaults={
                 "vector": None,
+                "sparse_vector": {},
                 "embedded_at": None,
                 "status": AIStatus.FAILED,
                 "error_message": str(e),
@@ -398,3 +552,81 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
             "chunk_id": chunk_id,
             "error": str(e),
         }
+
+
+@shared_task(queue="text2sql", bind=True, soft_time_limit=330, time_limit=360)
+def generate_text2sql_response(self, prompt: str) -> dict:
+    """
+    Celery 태스크: Text2SQL 요청을 전용 큐에서 순차적으로 받아
+    Redis Semaphore 범위 안에서만 LLM 서버에 전달합니다.
+    """
+    import requests
+    from redis import Redis
+    from redis_semaphore import NotAvailable, Semaphore
+
+    llm_base_url = os.getenv("TEXT2SQL_LLM_URL", "http://llm-parser:8080").rstrip("/")
+    redis_url = os.getenv("TEXT2SQL_REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"))
+    semaphore_count = _get_positive_int_env("TEXT2SQL_SEMAPHORE_COUNT", 1)
+    semaphore_timeout = _get_positive_int_env("TEXT2SQL_SEMAPHORE_TIMEOUT", 5)
+    request_timeout = _get_positive_int_env("TEXT2SQL_REQUEST_TIMEOUT", 300)
+    max_tokens = _get_positive_int_env("TEXT2SQL_MAX_TOKENS", 128)
+    stale_lock_timeout = max(request_timeout + 60, 300)
+    semaphore_namespace = os.getenv("TEXT2SQL_SEMAPHORE_NAMESPACE", "llm_text2sql_v2")
+
+    redis_client = Redis.from_url(redis_url)
+    semaphore = Semaphore(
+        redis_client,
+        count=semaphore_count,
+        namespace=semaphore_namespace,
+        stale_client_timeout=stale_lock_timeout,
+    )
+
+    try:
+        semaphore.acquire(timeout=semaphore_timeout)
+    except NotAvailable:
+        logger.warning(
+            "Text2SQL semaphore timeout after %ss (count=%s)",
+            semaphore_timeout,
+            semaphore_count,
+        )
+        return {
+            "status": "busy",
+            "message": "Text2SQL worker is busy. Please retry shortly.",
+        }
+
+    try:
+        model = "google/gemma-4-E4B-it"
+        system_prompt = (
+            "당신은 PostgreSQL용 SQL 생성기입니다. "
+            "설명, 주석, 코드블록 없이 SQL 쿼리 하나만 출력하세요."
+        )
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "max_tokens": max_tokens,
+            "stream": False,
+            "reasoning_format": "none",
+        }
+        res = requests.post(
+            f"{llm_base_url}/v1/chat/completions",
+            json=payload,
+            timeout=(5, request_timeout),
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.Timeout as e:
+        logger.error("Text2SQL LLM timeout after %ss: %s", request_timeout, e)
+        return {
+            "status": "error",
+            "message": f"Text2SQL request timed out after {request_timeout}s",
+        }
+    except Exception as e:
+        logger.error(f"Text2SQL LLM Error: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        semaphore.release()

@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/v1/upload/", api_views.upload_file, name="api_upload"),
     path("api/v1/create_folder/", api_views.create_folder, name="api_create_folder"),
     path("api/v1/folders/", api_views.all_folders, name="api_all_folders"),
+    path("api/v1/storage/", api_views.get_storage_usage, name="api_storage_usage"),
     path("api/v1/<uuid:uid>/", api_views.file_detail, name="api_detail"),
     path("api/v1/<uuid:uid>/rename/", api_views.rename_file, name="api_rename"),
     path("api/v1/<uuid:uid>/move/", api_views.move_file, name="api_move"),

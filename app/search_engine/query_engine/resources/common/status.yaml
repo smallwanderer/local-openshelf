@@ -1,0 +1,19 @@
+fileblob:
+  uploaded: UPLOADED
+  pending: PENDING
+  failed: FAILED
+
+parse_result:
+  pending: PENDING
+  success: SUCCESS
+  failed: FAILED
+
+chunk:
+  pending: PENDING
+  success: SUCCESS
+  failed: FAILED
+
+embedding:
+  pending: PENDING
+  success: SUCCESS
+  failed: FAILED

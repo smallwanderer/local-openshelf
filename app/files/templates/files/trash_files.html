@@ -1,32 +1,30 @@
 {% extends "files/base.html" %}
 
-{% block title %}휴지통 | FileHub{% endblock %}
+{% block title %}Trash | Openshelf{% endblock %}
 
 {% block files_body %}
-
 <div class="section-header">
-  <h2>휴지통</h2>
+  <h2>Trash</h2>
   <div class="section-actions" id="emptyTrashAction" style="display:none;">
     <button onclick="emptyTrash()" class="btn btn-ghost" style="color:var(--danger);">
-      휴지통 비우기
+      Empty trash
     </button>
   </div>
 </div>
 
-<!-- 보관 정책 안내 -->
 <div style="background:var(--bg); border-radius:var(--radius); padding:11px 16px; font-size:13px; color:var(--muted); margin-bottom:16px; display:flex; align-items:center; gap:8px;">
-  <span>⏱️</span>
-  삭제된 파일은 30일 후 자동으로 완전 삭제됩니다.
+  <span>i</span>
+  <span>Trashed files are kept for 7 days before automatic removal.</span>
 </div>
 
 <div class="file-table-wrap" id="tableWrap" style="display:none;">
   <table class="file-table">
     <thead>
       <tr>
-        <th>이름</th>
-        <th>크기</th>
-        <th>삭제 날짜</th>
-        <th>자동 삭제까지</th>
+        <th>Name</th>
+        <th>Size</th>
+        <th>Deleted on</th>
+        <th>Auto delete in</th>
         <th></th>
       </tr>
     </thead>
@@ -35,28 +33,36 @@
 </div>
 
 <div class="empty-state" id="emptyState" style="display:none;">
-  <div class="empty-state-icon">🗑️</div>
-  <h3>휴지통이 비어 있습니다</h3>
-  <p>삭제된 파일이 없습니다</p>
+  <div class="empty-state-icon">Trash</div>
+  <h3>Your trash is empty</h3>
+  <p>Deleted files will appear here for 7 days.</p>
 </div>
-
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
   function getCookie(name) {
-      let cookieValue = null;
-      if (document.cookie && document.cookie !== '') {
-          const cookies = document.cookie.split(';');
-          for (let i = 0; i < cookies.length; i++) {
-              const cookie = cookies[i].trim();
-              if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                  cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                  break;
-              }
-          }
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+      const cookies = document.cookie.split(';');
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
       }
-      return cookieValue;
+    }
+    return cookieValue;
+  }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   document.addEventListener("DOMContentLoaded", fetchTrash);
@@ -65,7 +71,9 @@
     fetch('/files/api/v1/trash/')
       .then(res => res.json())
       .then(data => {
-        if (data.ok) renderTable(data.files);
+        if (data.ok) {
+          renderTable(data.files);
+        }
       });
   }
 
@@ -75,37 +83,36 @@
     const empty = document.getElementById('emptyState');
     const emptyAction = document.getElementById('emptyTrashAction');
     tbody.innerHTML = '';
-    
+
     if (files.length === 0) {
       wrap.style.display = 'none';
       emptyAction.style.display = 'none';
       empty.style.display = 'block';
       return;
     }
-    
+
     wrap.style.display = 'block';
     emptyAction.style.display = 'block';
     empty.style.display = 'none';
-    
+
     files.forEach(f => {
-      // Mock 'days until deletion' for UI since backend model field isn't exposed directly
-      const daysLeft = 30; // Just a placeholder, would normally come from f.days_until_deletion
-      
-      const isFile = f.node_type === 'file';
+      const daysLeft = Number.isFinite(f.days_until_purge) ? f.days_until_purge : 0;
+      const deletedAt = f.deleted_at ? new Date(f.deleted_at).toLocaleDateString() : '-';
+
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>
           <div class="file-name-cell" style="opacity:0.6;">
-            <span class="file-name-text">${f.name}</span>
+            <span class="file-name-text">${escapeHtml(f.name)}</span>
           </div>
         </td>
-        <td class="meta-text">${f.size_mb ? f.size_mb + ' MB' : '-'}</td>
-        <td class="meta-text">${new Date(f.deleted_at || f.updated_at).toLocaleDateString()}</td>
-        <td class="meta-text">${daysLeft}일 후</td>
+        <td class="meta-text">${f.size_mb ? `${escapeHtml(f.size_mb)} MB` : '-'}</td>
+        <td class="meta-text">${deletedAt}</td>
+        <td class="meta-text">${escapeHtml(daysLeft)} day${daysLeft === 1 ? '' : 's'}</td>
         <td>
           <div class="file-actions">
-            <button onclick="restoreFile('${f.uid}')" class="icon-btn" title="복구" style="font-size:13px;border:none;background:none;cursor:pointer;">↩</button>
-            <button onclick="permanentDelete('${f.uid}')" class="icon-btn danger" title="영구 삭제" style="border:none;background:none;cursor:pointer;">
+            <button onclick="restoreFile('${f.uid}')" class="icon-btn" title="Restore" style="font-size:13px;border:none;background:none;cursor:pointer;">Restore</button>
+            <button onclick="permanentDelete('${f.uid}')" class="icon-btn danger" title="Delete permanently" style="border:none;background:none;cursor:pointer;">
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/>
               </svg>
@@ -123,28 +130,39 @@
       headers: {'X-CSRFToken': getCookie('csrftoken')}
     })
     .then(res => res.json())
-    .then(data => { if(data.ok) fetchTrash(); });
+    .then(data => {
+      if (data.ok) {
+        fetchTrash();
+        return;
+      }
+      alert((data.errors && data.errors[0]) || 'Unable to restore this item.');
+      fetchTrash();
+    });
   }
 
   function permanentDelete(uid) {
-    if(confirm('영구 삭제하면 복구할 수 없습니다.')) {
+    if (confirm('Permanently delete this item? This cannot be undone.')) {
       fetch(`/files/api/v1/${uid}/permanent_delete/`, {
         method: 'POST',
         headers: {'X-CSRFToken': getCookie('csrftoken')}
       })
       .then(res => res.json())
-      .then(data => { if(data.ok) fetchTrash(); });
+      .then(data => {
+        if (data.ok) fetchTrash();
+      });
     }
   }
 
   function emptyTrash() {
-    if(confirm('휴지통을 완전히 비우시겠습니까? 복구할 수 없습니다.')) {
+    if (confirm('Empty the trash? Restoring these items will no longer be possible.')) {
       fetch('/files/api/v1/trash/empty/', {
         method: 'POST',
         headers: {'X-CSRFToken': getCookie('csrftoken')}
       })
       .then(res => res.json())
-      .then(data => { if(data.ok) fetchTrash(); });
+      .then(data => {
+        if (data.ok) fetchTrash();
+      });
     }
   }
 </script>

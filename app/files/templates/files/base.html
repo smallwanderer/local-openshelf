@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block extra_head %}
 <style>
@@ -177,20 +178,28 @@
   .file-name-cell:hover .file-name-text { color: var(--accent); }
   .file-name-text { font-weight: 500; }
 
-  .file-type-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 7px;
+  .file-type-icon, .card-icon, .detail-icon, .result-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
     flex-shrink: 0;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    text-indent: -9999px; /* Hide emoji text */
+    overflow: hidden;
   }
-  .icon-pdf   { background: #FEF2F2; }
-  .icon-image { background: #F0FDF4; }
-  .icon-doc   { background: #EFF4FF; }
-  .icon-other { background: var(--bg); }
+  .file-type-icon { width: 32px; height: 32px; border-radius: 7px; font-size: 16px; }
+  .card-icon      { width: 44px; height: 44px; border-radius: 10px; font-size: 22px; }
+  .detail-icon    { width: 56px; height: 56px; border-radius: 12px; font-size: 28px; }
+  .result-icon    { width: 40px; height: 40px; border-radius: 10px; font-size: 20px; }
+
+  .icon-pdf-doc { background-image: url('{% static "assets/icons/file-p.svg" %}?v=4'); }
+  .icon-image   { background-image: url('{% static "assets/icons/image.svg" %}?v=2'); }
+  .icon-doc     { background-image: url('{% static "assets/icons/doc.svg" %}?v=2'); }
+  .icon-hwp     { background-image: url('{% static "assets/icons/hwp.svg" %}?v=2'); }
+  .icon-folder  { background-image: url('{% static "assets/icons/folder.svg" %}?v=2'); }
+  .icon-other   { background-image: url('{% static "assets/icons/other.svg" %}?v=2'); }
 
   .file-actions {
     display: flex;
@@ -284,10 +293,10 @@
       <div class="storage-box">
         <p class="storage-label">사용 중인 공간</p>
         <div class="storage-bar">
-          <div class="storage-bar-fill" style="width: {{ storage_percent|default:'0' }}%"></div>
+          <div class="storage-bar-fill" style="width: {{ user_storage.usage_percent }}%"></div>
         </div>
         <p class="storage-numbers">
-          {{ used_storage|default:'0 MB' }} / {{ total_storage|default:'5 GB' }}
+          {{ user_storage.used_size_mb }} MB / {{ user_storage.total_size_gb }} GB
         </p>
       </div>
     </div>

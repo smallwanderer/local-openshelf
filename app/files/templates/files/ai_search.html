@@ -1,6 +1,7 @@
 {% extends "files/base.html" %}
+{% load static %}
 
-{% block title %}AI 검색 | FileHub{% endblock %}
+{% block title %}AI 검색 | Openshelf{% endblock %}
 
 {% block extra_head %}
 {{ block.super }}
@@ -82,13 +83,7 @@
     border-color: var(--accent);
     box-shadow: var(--shadow);
   }
-  .result-icon {
-    width: 40px; height: 40px;
-    border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px;
-    flex-shrink: 0;
-  }
+  /* .result-icon styles moved to base.html */
   .result-info { flex: 1; min-width: 0; }
   .result-name {
     font-size: 15px;
@@ -99,6 +94,11 @@
     font-size: 13px;
     color: var(--muted);
     margin-bottom: 6px;
+  }
+  .result-snippet {
+    margin-top: 4px;
+    white-space: pre-line;
+    line-height: 1.45;
   }
   .result-meta { font-size: 12px; color: var(--muted); }
 
@@ -185,23 +185,41 @@
       "{{ query }}"에 대한 결과 {{ results|length }}개
     </p>
     {% for result in results %}
-    <a href="{% url 'files:detail' result.file.pk %}" class="result-item">
-      <div class="result-icon icon-{{ result.file.file_type|default:'other' }}">
-        {% if result.file.file_type == 'pdf' %}📄
-        {% elif result.file.file_type == 'image' %}🖼️
-        {% elif result.file.file_type == 'doc' %}📝
-        {% else %}📁{% endif %}
+    <a href="{% url 'files:page_node' result.node_id %}" class="result-item">
+      <div class="result-icon">
+        {% if result.file_ext == 'pdf' %}
+          <img src="{% static 'assets/icons/file-p.svg' %}" alt="pdf" width="32" height="32">
+        {% elif result.file_ext == 'image' %}
+          <img src="{% static 'assets/icons/image.svg' %}" alt="image" width="32" height="32">
+        {% elif result.file_ext == 'hwp' or result.file_ext == 'hwpx' %}
+          <img src="{% static 'assets/icons/hwp.svg' %}" alt="hwp" width="32" height="32">
+        {% elif result.file_ext in 'doc,docx,txt' %}
+          <img src="{% static 'assets/icons/doc.svg' %}" alt="doc" width="32" height="32">
+        {% else %}
+          <img src="{% static 'assets/icons/other.svg' %}" alt="icon" width="32" height="32">
+        {% endif %}
       </div>
       <div class="result-info">
-        <p class="result-name">{{ result.file.name }}</p>
-        <p class="result-reason">{{ result.reason }}</p>
-        <p class="result-meta">{{ result.file.size_display }} · {{ result.file.uploaded_at|date:"Y.m.d" }}</p>
+        <p class="result-name">{{ result.node_name }}</p>
+        <div class="result-reason" style="margin-top:8px;">
+          {% for ev in result.evidences %}
+            <div style="margin-bottom:6px; padding:8px; background:var(--bg); border-radius:6px; font-size:12px; color:var(--text);">
+              <span style="font-weight:600; color:var(--accent);">
+                {% if ev.pages and ev.pages != 'None' %}[{{ ev.pages }}p]{% endif %}
+                {% if ev.section %} - {{ ev.section }}{% endif %}
+              </span>
+              <div class="result-snippet">{{ ev.context_text|default:ev.text|truncatechars:240 }}</div>
+            </div>
+          {% endfor %}
+        </div>
+        <p class="result-meta" style="margin-top:6px;">{{ result.file_ext|upper }} 파일</p>
       </div>
       <div class="similarity-wrap">
         <div class="similarity-bar">
-          <div class="similarity-fill" style="width:{{ result.similarity_pct }}%"></div>
+          <!-- doc_score는 log 정규화 값이므로 임의로 %를 구하기 위해 시각적 비율 처리 -->
+          <div class="similarity-fill" style="width:100%"></div>
         </div>
-        <span class="similarity-label">{{ result.similarity_pct }}%</span>
+        <span class="similarity-label">Score: {{ result.doc_score|floatformat:2 }}</span>
       </div>
     </a>
     {% endfor %}

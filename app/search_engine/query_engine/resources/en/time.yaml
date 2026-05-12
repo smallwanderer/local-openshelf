@@ -1,0 +1,44 @@
+yesterday:
+  type: relative_day
+  value: -1
+  canonical: yesterday
+
+today:
+  type: relative_day
+  value: 0
+  canonical: today
+
+last week:
+  type: relative_week
+  value: -1
+  canonical: last_week
+
+previous week:
+  type: relative_week
+  value: -1
+  canonical: last_week
+
+the week before last:
+  type: relative_week
+  value: -2
+  canonical: week_before_last
+
+last 2 weeks:
+  type: recent
+  value: 14
+  canonical: last_2_weeks
+
+past 2 weeks:
+  type: recent
+  value: 14
+  canonical: last_2_weeks
+
+past two weeks:
+  type: recent
+  value: 14
+  canonical: last_2_weeks
+
+recent:
+  type: recent
+  value: 7
+  canonical: recent

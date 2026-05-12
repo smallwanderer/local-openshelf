@@ -1,7 +1,8 @@
 services:
   db:
     image: pgvector/pgvector:pg16
-    container_name: filehub-db
+    container_name: openshelf-db
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -19,7 +20,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: filehub-redis
+    container_name: openshelf-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
@@ -30,29 +32,8 @@ services:
 
   app:
     build: ./app
-    container_name: filehub-app
-    env_file:
-      - .env
-    volumes:
-      - ./app:/app
-      - ./data/uploads:/data/uploads
-    depends_on:
-      db:
-        condition: service_healthy
-    expose:
-      - "8000"
-    command: [ "bash", "-lc", "python manage.py runserver 0.0.0.0:8000" ]
-
-    healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:8000/files/healthcheck/" ]
-      interval: 3s
-      timeout: 3s
-      retries: 5
-      start_period: 60s
-
-  celery-worker:
-    build: ./app
-    container_name: filehub-celery-worker
+    container_name: openshelf-app
+    restart: unless-stopped
     env_file:
       - .env
     volumes:
@@ -63,11 +44,54 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed" ]
+    expose:
+      - "8000"
+    command: [ "bash", "-lc", "python manage.py runserver 0.0.0.0:8000" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/files/healthcheck/')" ]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+      start_period: 60s
+
+  celery-worker:
+    build: ./app
+    container_name: openshelf-celery-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app
+      - ./data/uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed --prefetch-multiplier=1" ]
+
+  celery-text2sql-worker:
+    build: ./app
+    container_name: openshelf-celery-text2sql-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app
+      - ./data/uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llm-parser:
+        condition: service_healthy
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q text2sql --concurrency=${TEXT2SQL_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
   celery-beat:
     build: ./app
-    container_name: filehub-celery-beat
+    container_name: openshelf-celery-beat
+    restart: unless-stopped
     env_file:
       - .env
     volumes:
@@ -79,12 +103,11 @@ services:
       redis:
         condition: service_healthy
     command: [ "bash", "-lc", "celery -A config beat -l info" ]
-    profiles:
-      - optional
 
   nginx:
     image: nginx:stable
-    container_name: filehub-nginx
+    container_name: openshelf-nginx
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
@@ -93,3 +116,24 @@ services:
     depends_on:
       app:
         condition: service_healthy
+
+  llm-parser:
+    build:
+      context: ./llama-cpp-parser
+      dockerfile: Dockerfile
+    container_name: openshelf-llm-parser
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+    volumes:
+      - ./llama-cpp-parser/data/cache:/root/.cache
+    command: >
+      --hf-repo ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --threads 8 --ctx-size 4096 --parallel 1 --metrics
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s

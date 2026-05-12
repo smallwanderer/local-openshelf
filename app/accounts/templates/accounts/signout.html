@@ -1,16 +1,16 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}로그아웃 | FileHub{% endblock %}
+{% block title %}Signed Out | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>로그아웃</h1>
-<p>다시 로그인하려면 아래 링크를 누르세요.</p>
+<h1>Signed out</h1>
+<p>You have been signed out successfully.</p>
 {% endblock %}
 
 {% block auth_body %}
-<a href="{% url 'accounts:login' %}" class="button button-primary auth-submit">로그인</a>
+<a href="{% url 'accounts:login' %}" class="button button-primary auth-submit">Sign in again</a>
 {% endblock %}
 
 {% block auth_footer %}
-<a href="{% url 'accounts:signup' %}">회원가입</a>
+<a href="{% url 'accounts:signup' %}">Create a new account</a>
 {% endblock %}

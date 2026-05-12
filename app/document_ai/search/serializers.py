@@ -16,18 +16,22 @@ class VectorSearchRequestSerializer(serializers.Serializer):
         help_text="허용할 최대 유사도 거리(값이 작을수록 유사함). 예: 0.8"
     )
     node_ids = serializers.ListField(
-        child=serializers.IntegerField(),
+        child=serializers.UUIDField(),
         required=False,
         help_text="특정 파일(Node) 내에서만 검색할 경우 ID 리스트"
     )
 
-class VectorSearchResponseSerializer(serializers.Serializer):
+class EvidenceSerializer(serializers.Serializer):
     chunk_id = serializers.IntegerField()
-    node_id = serializers.IntegerField()
-    node_name = serializers.CharField()
-    file_ext = serializers.CharField()
     text = serializers.CharField()
-    prompt_context = serializers.CharField()
+    context_text = serializers.CharField()
     section = serializers.CharField(allow_blank=True)
     pages = serializers.CharField()
     distance = serializers.FloatField()
+
+class VectorSearchResponseSerializer(serializers.Serializer):
+    node_id = serializers.UUIDField()
+    node_name = serializers.CharField()
+    file_ext = serializers.CharField()
+    doc_score = serializers.FloatField()
+    evidences = serializers.ListField(child=EvidenceSerializer())

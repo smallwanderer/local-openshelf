@@ -26,7 +26,7 @@ from drf_yasg import openapi
 
 schema_view = get_schema_view(
     openapi.Info(
-        title="FileHub API",
+        title="Openshelf API",
         default_version='v1',
         description="API documentation for RAG Search and File Management",
     ),
@@ -48,3 +48,4 @@ urlpatterns = [
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])

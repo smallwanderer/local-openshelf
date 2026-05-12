@@ -1,0 +1,15 @@
+uploaded:
+  scope: fileblob
+  value: uploaded
+
+parsing success:
+  scope: parse_result
+  value: success
+
+parsing failed:
+  scope: parse_result
+  value: failed
+
+embedded:
+  scope: embedding
+  value: success

@@ -1,19 +1,19 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}이메일 인증 완료 | FileHub{% endblock %}
+{% block title %}Verification Complete | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>이메일 인증 완료</h1>
-<p>계정이 활성화되었습니다. 이제 로그인할 수 있습니다.</p>
+<h1>Email verified</h1>
+<p>Your account has been activated. You can sign in now.</p>
 {% endblock %}
 
 {% block auth_body %}
 <a href="{% url 'accounts:login' %}" class="button button-primary auth-submit"
     style="display: flex; justify-content: center;">
-    로그인
+    Sign in
 </a>
 {% endblock %}
 
 {% block auth_footer %}
-<a href="{% url 'accounts:signup' %}">회원가입</a>
+<a href="{% url 'accounts:signup' %}">Create another account</a>
 {% endblock %}

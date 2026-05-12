@@ -1,0 +1,8 @@
+under: lt
+below: lt
+less than: lt
+at most: lte
+over: gt
+greater than: gt
+at least: gte
+contains: contains

@@ -1,0 +1,15 @@
+byte:
+  aliases: [B]
+  multiplier: 1
+
+kb:
+  aliases: [KB, KiB]
+  multiplier: 1024
+
+mb:
+  aliases: [MB, MiB]
+  multiplier: 1048576
+
+gb:
+  aliases: [GB, GiB]
+  multiplier: 1073741824

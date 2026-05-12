@@ -1,0 +1,15 @@
+어제:
+  type: relative_day
+  value: -1
+
+오늘:
+  type: relative_day
+  value: 0
+
+지난주:
+  type: relative_week
+  value: -1
+
+최근:
+  type: recent
+  value: 7

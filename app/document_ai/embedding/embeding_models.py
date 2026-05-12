@@ -1,108 +1,173 @@
-from typing import List
 import gc
 import logging
+import math
+from dataclasses import dataclass
+from typing import Any, Dict
 
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised only when torch is unavailable
+    torch = None
+
+from document_ai.parsers.config import (
+    get_embedding_backend,
+    get_embedding_max_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
-_TOKENIZER = None
-_MODEL = None
-_MODEL_NAME = None
-_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_MODEL_CACHE: Dict[str, Any] = {}
+if torch is not None:
+    _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+else:
+    _DEVICE = None
 
 
-# TODO: 임베딩 처리 과정에서 서버 메모리 부족 방지를 위해,
-# 1. GPU 메모리 OOM 방어를 위해 배치(Batch) 처리 로직 검토할 것.
-# 2. 서비스 확장 시 `bge-m3` 모델을 GPU 전용 TGI / vLLM 서버로 분리하는 것 고려.
+@dataclass
+class EmbeddingResult:
+    dense_vector: list[float]
+    sparse_vector: dict[str, float]
+
 
 def _clear_cuda_cache() -> None:
-    if _DEVICE.type == "cuda":
+    if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
         torch.cuda.empty_cache()
         if torch.cuda.is_available():
             torch.cuda.ipc_collect()
 
 
-def _get_model_and_tokenizer(model_name: str):
-    """
-    BGE-M3 모델과 토크나이저를 로드합니다. (싱글톤)
-    """
-    global _TOKENIZER, _MODEL, _MODEL_NAME, _DEVICE
-    
-    if _MODEL_NAME != model_name:
-        _TOKENIZER = AutoTokenizer.from_pretrained(model_name)
-        _MODEL = AutoModel.from_pretrained(model_name)
-        _MODEL.to(_DEVICE)
-        _MODEL.eval()
-        _MODEL_NAME = model_name
-        
-    return _MODEL, _TOKENIZER
+def _get_bgem3_model(model_name: str):
+    model = _MODEL_CACHE.get(model_name)
+    if model is None:
+        try:
+            from FlagEmbedding import BGEM3FlagModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "FlagEmbedding is required for bgem3_hybrid embeddings."
+            ) from exc
+
+        model = BGEM3FlagModel(
+            model_name,
+            use_fp16=(_DEVICE is not None and _DEVICE.type == "cuda"),
+        )
+        _MODEL_CACHE[model_name] = model
+    return model
+
+
+def _validate_text(text: str) -> str:
+    if not isinstance(text, str):
+        raise ValueError("Text not String")
+
+    normalized = text.strip()
+    if not normalized:
+        raise ValueError("Text is Empty")
+
+    return normalized
+
+
+def _normalize_sparse_vector(weights: dict[str, float]) -> dict[str, float]:
+    if not weights:
+        return {}
+
+    norm = math.sqrt(sum(value * value for value in weights.values()))
+    if norm <= 0:
+        return {}
+
+    return {
+        key: value / norm
+        for key, value in weights.items()
+        if value > 0
+    }
+
+
+def _coerce_sparse_vector(raw_sparse: dict) -> dict[str, float]:
+    sparse_vector = {
+        str(key): float(value)
+        for key, value in (raw_sparse or {}).items()
+        if float(value) > 0
+    }
+    return _normalize_sparse_vector(sparse_vector)
+
+
+def _coerce_dense_vector(raw_dense) -> list[float]:
+    if hasattr(raw_dense, "tolist"):
+        raw_dense = raw_dense.tolist()
+
+    if raw_dense and isinstance(raw_dense[0], list):
+        raw_dense = raw_dense[0]
+
+    vector = [float(value) for value in raw_dense]
+    if not vector:
+        raise RuntimeError("Embedding vector is empty")
+    return vector
+
+
+def _embed_with_bgem3_hybrid(
+    text: str,
+    model_name: str,
+    max_length: int,
+) -> EmbeddingResult:
+    model = _get_bgem3_model(model_name)
+
+    try:
+        output = model.encode(
+            [text],
+            batch_size=1,
+            max_length=max_length,
+            return_dense=True,
+            return_sparse=True,
+            return_colbert_vecs=False,
+        )
+
+        dense_vector = _coerce_dense_vector(output["dense_vecs"])
+        lexical_weights = output.get("lexical_weights") or [{}]
+        if isinstance(lexical_weights, list):
+            lexical_weights = lexical_weights[0] if lexical_weights else {}
+        sparse_vector = _coerce_sparse_vector(lexical_weights)
+
+        return EmbeddingResult(
+            dense_vector=dense_vector,
+            sparse_vector=sparse_vector,
+        )
+
+    except Exception as exc:
+        if torch is not None and isinstance(exc, torch.cuda.OutOfMemoryError):
+            logger.exception(
+                "CUDA OOM during embedding. model=%s, backend=bgem3_hybrid, max_length=%s, device=%s",
+                model_name,
+                max_length,
+                _DEVICE,
+            )
+            _clear_cuda_cache()
+            gc.collect()
+            raise RuntimeError(
+                f"GPU OOM while embedding text (model={model_name}, backend=bgem3_hybrid, max_length={max_length})"
+            ) from exc
+        raise
+    finally:
+        gc.collect()
+        if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
+            torch.cuda.empty_cache()
 
 
 def bge_m3_embedder(
     text: str,
     model_name: str = "BAAI/bge-m3",
-    padding: bool = False,
-    truncation: bool = True,
-    normalize: bool = True,
-    max_length: int = 8192,
-) -> list[float]:
+    max_length: int | None = None,
+    backend: str | None = None,
+) -> EmbeddingResult:
     """
-    BGE-M3 모델 전용 임베딩 함수
-    # TODO: 현재 입력 토큰은 1024 + alpha, 토큰 들어오는 것이 불안정함.
+    Generate dense and sparse embeddings from BGE-M3 using FlagEmbedding.
     """
-    
-    if not isinstance(text, str):
-        raise ValueError("Text not String")
+    normalized_text = _validate_text(text)
+    resolved_backend = backend or get_embedding_backend()
+    resolved_max_length = max_length or get_embedding_max_tokens()
 
-    text = text.strip()
-    if not text:
-        raise ValueError("Text is Empty")
-
-    model, tokenizer = _get_model_and_tokenizer(model_name)
-
-    try:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=truncation,
-            padding=padding,
-            max_length=max_length,
+    if resolved_backend == "bgem3_hybrid":
+        return _embed_with_bgem3_hybrid(
+            text=normalized_text,
+            model_name=model_name,
+            max_length=resolved_max_length,
         )
 
-        inputs = {k: v.to(_DEVICE) for k, v in inputs.items()}
-
-        with torch.inference_mode():
-            outputs = model(**inputs)
-            embeddings = outputs.last_hidden_state[:, 0]
-
-            if normalize:
-                embeddings = F.normalize(embeddings, p=2, dim=1)
-
-        vector = embeddings[0].detach().cpu().tolist()
-
-        if not vector:
-            raise RuntimeError("Embedding vector is empty")
-
-        return vector
-
-    except torch.cuda.OutOfMemoryError as e:
-        logger.exception(
-            "CUDA OOM during embedding. model=%s, max_length=%s, device=%s",
-            model_name, max_length, _DEVICE,
-        )
-        _clear_cuda_cache()
-        gc.collect()
-        raise RuntimeError(
-            f"GPU OOM while embedding text (model={model_name}, max_length={max_length})"
-        ) from e
-
-    finally:
-        for var_name in ("inputs", "outputs", "embeddings"):
-            if var_name in locals():
-                del locals()[var_name]
-        gc.collect()
-        if _DEVICE.type == "cuda":
-            torch.cuda.empty_cache()
+    raise ValueError(f"Unsupported embedding backend: {resolved_backend}")

@@ -1,0 +1,29 @@
+# Based on Openshelf Models
+
+node:
+  model: files.Node
+  fields: [name, ext, node_type, path, trashed, owner]
+
+fileblob:
+  model: files.FileBlob
+  fields: [status, sha256, size, mime_type]
+
+parse_result:
+  model: document_ai.DocumentParseResult
+  fields: [parser_name, status, chunk_count, metadata]
+
+chunk:
+  model: document_ai.DocumentChunk
+  fields: [chunk_index, text, page_from, page_to]
+
+embedding:
+  model: document_ai.ChunkEmbedding
+  fields: [model_name, vector, sparse_vector]
+
+user:
+  model: accounts.User
+  fields: [email, is_active, is_staff, email_verified, created_at]
+
+user_storage:
+  model: files.UserStorage
+  fields: [total_size, used_size]

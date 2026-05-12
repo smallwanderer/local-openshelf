@@ -19,7 +19,9 @@ from .config import get_hf_tokenizer, get_converter, get_hybrid_hf_chunker
 from .text_utils import (
     ExtFormat,
     serialize_meta,
+    normalize_extracted_text,
     convert_to_markdown,
+    wrap_text_as_markdown,
     detect_input_format,
     _safe_str,
     _safe_int,
@@ -117,7 +119,9 @@ def _parse_docling_document(
 
     chunks: List[ChunkPayload] = []
     for i, chunk in enumerate(chunk_iter):
-        serialized_text = chunker.contextualize(chunk=chunk)
+        serialized_text = normalize_extracted_text(
+            chunker.contextualize(chunk=chunk)
+        )
         meta = serialize_meta(chunk.meta) if hasattr(chunk, "meta") else None
 
         chunks.append(
@@ -213,7 +217,7 @@ def parse_document_hwp(file_path: str) -> ParseResult:
     ext = Path(file_path).suffix.lower()
     if ext == ".hwp":
         string_document = convert_hwp_to_txt(file_path)
-        md_content = convert_to_markdown(string_document)
+        md_content = wrap_text_as_markdown(string_document, file_path)
     elif ext == ".hwpx":
         md_content = convert_hwpx_to_markdown(file_path)
     else:
