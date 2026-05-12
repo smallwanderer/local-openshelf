@@ -68,7 +68,25 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed" ]
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed --prefetch-multiplier=1" ]
+
+  celery-text2sql-worker:
+    build: ./app
+    container_name: openshelf-celery-text2sql-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app
+      - ./data/uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      llm-parser:
+        condition: service_healthy
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q text2sql --concurrency=${TEXT2SQL_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
   celery-beat:
     build: ./app
@@ -85,8 +103,6 @@ services:
       redis:
         condition: service_healthy
     command: [ "bash", "-lc", "celery -A config beat -l info" ]
-    profiles:
-      - optional
 
   nginx:
     image: nginx:stable

@@ -1,31 +1,29 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}이메일 인증 실패 | Openshelf{% endblock %}
+{% block title %}Verification Failed | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>이메일 인증 실패</h1>
-<p>링크가 잘못되었거나 만료되었습니다.</p>
+<h1>Verification failed</h1>
+<p>The verification link is invalid or has expired.</p>
 {% endblock %}
 
 {% block auth_body %}
 <div style="text-align: center; padding: 8px 0 16px;">
-    <span style="font-size: 40px;">⚠️</span>
+    <span style="font-size: 40px;">!</span>
 </div>
 
 <p style="font-size: 14px; color: var(--muted); text-align: center; line-height: 1.7; margin-bottom: 20px;">
-    인증 링크가 만료되었거나 이미 사용된 링크입니다.<br>
-    아래 버튼을 눌러 인증 메일을 다시 받아보세요.
+    Request a new verification email and try again.
 </p>
 
 <a href="{% url 'accounts:resend_verification' %}" class="btn btn-primary auth-submit"
     style="display: flex; justify-content: center;">
-    {% csrf_token %}
-    인증 메일 재발송
+    Resend verification email
 </a>
 {% endblock %}
 
 {% block auth_footer %}
-<a href="{% url 'accounts:signup' %}">다시 회원가입</a>
-&nbsp;·&nbsp;
-<a href="{% url 'accounts:login' %}">로그인</a>
+<a href="{% url 'accounts:signup' %}">Create account</a>
+&nbsp;|&nbsp;
+<a href="{% url 'accounts:login' %}">Sign in</a>
 {% endblock %}

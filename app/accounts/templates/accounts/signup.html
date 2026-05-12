@@ -1,10 +1,10 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}회원가입 | Openshelf{% endblock %}
+{% block title %}Create Account | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>시작하기</h1>
-<p>Openshelf에 오신 것을 환영합니다</p>
+<h1>Create your account</h1>
+<p>Start using Openshelf with your email address.</p>
 {% endblock %}
 
 {% block auth_body %}
@@ -12,7 +12,7 @@
     {% csrf_token %}
 
     <div class="form-group">
-        <label for="{{ form.email.id_for_label }}">이메일</label>
+        <label for="{{ form.email.id_for_label }}">Email</label>
         {{ form.email }}
         {% if form.email.errors %}
         <p class="field-error">{{ form.email.errors.0 }}</p>
@@ -20,7 +20,7 @@
     </div>
 
     <div class="form-group">
-        <label for="{{ form.password.id_for_label }}">비밀번호</label>
+        <label for="{{ form.password.id_for_label }}">Password</label>
         {{ form.password }}
         {% if form.password.errors %}
         <p class="field-error">{{ form.password.errors.0 }}</p>
@@ -28,7 +28,7 @@
     </div>
 
     <div class="form-group">
-        <label for="{{ form.password2.id_for_label }}">비밀번호 확인</label>
+        <label for="{{ form.password2.id_for_label }}">Confirm password</label>
         {{ form.password2 }}
         {% if form.password2.errors %}
         <p class="field-error">{{ form.password2.errors.0 }}</p>
@@ -39,10 +39,10 @@
     <p class="field-error">{{ form.non_field_errors.0 }}</p>
     {% endif %}
 
-    <button type="submit" class="btn btn-primary auth-submit">계정 만들기</button>
+    <button type="submit" class="btn btn-primary auth-submit">Create account</button>
 </form>
 {% endblock %}
 
 {% block auth_footer %}
-이미 계정이 있으신가요? <a href="{% url 'accounts:login' %}">로그인</a>
+Already have an account? <a href="{% url 'accounts:login' %}">Sign in</a>
 {% endblock %}

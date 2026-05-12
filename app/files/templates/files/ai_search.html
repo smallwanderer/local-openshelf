@@ -95,6 +95,11 @@
     color: var(--muted);
     margin-bottom: 6px;
   }
+  .result-snippet {
+    margin-top: 4px;
+    white-space: pre-line;
+    line-height: 1.45;
+  }
   .result-meta { font-size: 12px; color: var(--muted); }
 
   /* 유사도 바 */
@@ -203,7 +208,7 @@
                 {% if ev.pages and ev.pages != 'None' %}[{{ ev.pages }}p]{% endif %}
                 {% if ev.section %} - {{ ev.section }}{% endif %}
               </span>
-              {{ ev.text|truncatechars:150 }}
+              <div class="result-snippet">{{ ev.context_text|default:ev.text|truncatechars:240 }}</div>
             </div>
           {% endfor %}
         </div>

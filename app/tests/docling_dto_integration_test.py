@@ -9,8 +9,9 @@ from pathlib import Path
 
 from document_ai.parsers.docling_parser import parse_document_entry, ParseResult
 
+pytestmark = pytest.mark.integration
 
-@pytest.mark.integration
+
 def test_parse_document_entry_with_real_markdown_file(tmp_path: Path):
     """
     실제 markdown 파일을 생성하고,
@@ -64,7 +65,6 @@ def test_parse_document_entry_with_real_markdown_file(tmp_path: Path):
     print("==================================\n")
 
 
-@pytest.mark.integration
 def test_parse_document_entry_with_file(tmp_path: Path):    
     project_root = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sample_file = project_root / "tests" / "test_files" / "hwpx_test.hwpx"

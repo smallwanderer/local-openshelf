@@ -4,10 +4,13 @@ psycopg[binary]==3.*
 
 celery[redis]==5.*
 redis==5.*
+redis-semaphore==0.2.2
 
 docling==2.*
+torchvision==0.*
 
 sentence-transformers==5.*
+FlagEmbedding==1.*
 
 pgvector==0.*
 
@@ -16,3 +19,7 @@ pyhwp==0.1b15
 djangorestframework==3.15.*
 drf-yasg==1.21.*
 pytest==8.*
+requests>=2.32,<2.33
+urllib3>=2.0,<3
+charset-normalizer>=3,<4
+chardet>=5,<6

@@ -1,6 +1,7 @@
 from typing import Any, Optional, Dict, List
 from enum import Enum
 from pathlib import Path
+import re
 
 from .constants import TEXT_LIKE_EXTENSIONS, BINARY_DOC_EXTENSIONS, HWP_EXTENSIONS, guess_code_fence_language
 
@@ -73,6 +74,30 @@ def convert_to_markdown(file_path: str) -> str:
 
     # 일반 텍스트
     return f"# Document: {file_name}\n\n{text}"
+
+
+def wrap_text_as_markdown(text: str, document_name: str) -> str:
+    return f"# Document: {Path(document_name).name}\n\n{text}"
+
+
+def normalize_extracted_text(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
+    normalized = (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u00a0", " ")
+    )
+
+    normalized_lines = []
+    for line in normalized.split("\n"):
+        collapsed = re.sub(r"[ \t\f\v]+", " ", line).strip()
+        normalized_lines.append(collapsed)
+
+    normalized = "\n".join(normalized_lines)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
 
 
 # ──────────────────────────────────────────────

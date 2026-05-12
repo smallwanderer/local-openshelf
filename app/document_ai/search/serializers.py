@@ -24,6 +24,7 @@ class VectorSearchRequestSerializer(serializers.Serializer):
 class EvidenceSerializer(serializers.Serializer):
     chunk_id = serializers.IntegerField()
     text = serializers.CharField()
+    context_text = serializers.CharField()
     section = serializers.CharField(allow_blank=True)
     pages = serializers.CharField()
     distance = serializers.FloatField()

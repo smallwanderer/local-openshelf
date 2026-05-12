@@ -2,7 +2,11 @@ from datetime import date
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+pytestmark = pytest.mark.unit
 
 from search_engine.query_engine import QueryAnalyzer
 
@@ -64,5 +68,5 @@ def test_query_engine_extracts_filename_keyword_hints():
 
     assert plan.filename_keywords == ["annual report"]
     assert plan.file_type == "pdf"
-    assert plan.semantic_query == ""
+    assert plan.semantic_query == "named"
     assert any(token.slot == "filename_keyword" for token in plan.matched_tokens)

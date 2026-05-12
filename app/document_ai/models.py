@@ -179,6 +179,7 @@ class ChunkEmbedding(models.Model):
 
     # dimension ?? 
     vector = VectorField(dimensions=1024, null=True, blank=True)
+    sparse_vector = models.JSONField(default=dict, blank=True)
 
     # Status
     status = models.CharField(
@@ -223,6 +224,7 @@ class ChunkEmbedding(models.Model):
             "chunk_id": self.chunk_id,
             "model_name": self.model_name,
             "model_version": self.model_version,
+            "sparse_terms": len(self.sparse_vector or {}),
             "embedded_at": self.embedded_at.isoformat() if self.embedded_at else None,
             "created_at": self.created_at.isoformat(),
         }

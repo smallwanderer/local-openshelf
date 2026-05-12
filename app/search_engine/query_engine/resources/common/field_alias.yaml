@@ -16,7 +16,7 @@ chunk:
 
 embedding:
   model: document_ai.ChunkEmbedding
-  fields: [model_name, vector]
+  fields: [model_name, vector, sparse_vector]
 
 user:
   model: accounts.User

@@ -1,10 +1,13 @@
 import gc
 import logging
-from typing import Dict, Tuple
+import math
+from dataclasses import dataclass
+from typing import Any, Dict
 
-import torch
-import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised only when torch is unavailable
+    torch = None
 
 from document_ai.parsers.config import (
     get_embedding_backend,
@@ -13,37 +16,42 @@ from document_ai.parsers.config import (
 
 logger = logging.getLogger(__name__)
 
-_TOKENIZER_CACHE: Dict[str, AutoTokenizer] = {}
-_MODEL_CACHE: Dict[str, AutoModel] = {}
-_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_MODEL_CACHE: Dict[str, Any] = {}
+if torch is not None:
+    _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+else:
+    _DEVICE = None
 
 
-# TODO: Review batch embedding once retrieval quality is stable.
-# TODO: Separate embedding inference into its own service if AI traffic grows.
+@dataclass
+class EmbeddingResult:
+    dense_vector: list[float]
+    sparse_vector: dict[str, float]
 
 
 def _clear_cuda_cache() -> None:
-    if _DEVICE.type == "cuda":
+    if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
         torch.cuda.empty_cache()
         if torch.cuda.is_available():
             torch.cuda.ipc_collect()
 
 
-def _get_model_and_tokenizer(model_name: str) -> Tuple[AutoModel, AutoTokenizer]:
-    tokenizer = _TOKENIZER_CACHE.get(model_name)
+def _get_bgem3_model(model_name: str):
     model = _MODEL_CACHE.get(model_name)
-
-    if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        _TOKENIZER_CACHE[model_name] = tokenizer
-
     if model is None:
-        model = AutoModel.from_pretrained(model_name)
-        model.to(_DEVICE)
-        model.eval()
-        _MODEL_CACHE[model_name] = model
+        try:
+            from FlagEmbedding import BGEM3FlagModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "FlagEmbedding is required for bgem3_hybrid embeddings."
+            ) from exc
 
-    return model, tokenizer
+        model = BGEM3FlagModel(
+            model_name,
+            use_fp16=(_DEVICE is not None and _DEVICE.type == "cuda"),
+        )
+        _MODEL_CACHE[model_name] = model
+    return model
 
 
 def _validate_text(text: str) -> str:
@@ -57,172 +65,109 @@ def _validate_text(text: str) -> str:
     return normalized
 
 
-def _tokenize_text(
-    tokenizer: AutoTokenizer,
-    text: str,
-    max_length: int,
-    truncation: bool,
-    padding: bool,
-) -> Dict[str, torch.Tensor]:
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=truncation,
-        padding=padding,
-        max_length=max_length,
-    )
-    return {key: value.to(_DEVICE) for key, value in inputs.items()}
+def _normalize_sparse_vector(weights: dict[str, float]) -> dict[str, float]:
+    if not weights:
+        return {}
+
+    norm = math.sqrt(sum(value * value for value in weights.values()))
+    if norm <= 0:
+        return {}
+
+    return {
+        key: value / norm
+        for key, value in weights.items()
+        if value > 0
+    }
 
 
-def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    expanded_mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-    masked_embeddings = last_hidden_state * expanded_mask
-    token_sums = masked_embeddings.sum(dim=1)
-    token_counts = expanded_mask.sum(dim=1).clamp(min=1e-9)
-    return token_sums / token_counts
+def _coerce_sparse_vector(raw_sparse: dict) -> dict[str, float]:
+    sparse_vector = {
+        str(key): float(value)
+        for key, value in (raw_sparse or {}).items()
+        if float(value) > 0
+    }
+    return _normalize_sparse_vector(sparse_vector)
 
 
-def _embed_with_hf_mean_pooling(
-    text: str,
-    model_name: str,
-    max_length: int,
-    truncation: bool,
-    padding: bool,
-    normalize: bool,
-) -> list[float]:
-    model, tokenizer = _get_model_and_tokenizer(model_name)
-    inputs = outputs = pooled = vector_tensor = None
+def _coerce_dense_vector(raw_dense) -> list[float]:
+    if hasattr(raw_dense, "tolist"):
+        raw_dense = raw_dense.tolist()
 
-    try:
-        inputs = _tokenize_text(
-            tokenizer=tokenizer,
-            text=text,
-            max_length=max_length,
-            truncation=truncation,
-            padding=padding,
-        )
+    if raw_dense and isinstance(raw_dense[0], list):
+        raw_dense = raw_dense[0]
 
-        with torch.inference_mode():
-            outputs = model(**inputs)
-            pooled = _mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
-
-            if normalize:
-                pooled = F.normalize(pooled, p=2, dim=1)
-
-        vector_tensor = pooled[0].detach().cpu()
-        vector = vector_tensor.tolist()
-        if not vector:
-            raise RuntimeError("Embedding vector is empty")
-        return vector
-
-    except torch.cuda.OutOfMemoryError as exc:
-        logger.exception(
-            "CUDA OOM during embedding. model=%s, backend=hf_mean_pooling, max_length=%s, device=%s",
-            model_name,
-            max_length,
-            _DEVICE,
-        )
-        _clear_cuda_cache()
-        gc.collect()
-        raise RuntimeError(
-            f"GPU OOM while embedding text (model={model_name}, backend=hf_mean_pooling, max_length={max_length})"
-        ) from exc
-
-    finally:
-        del inputs, outputs, pooled, vector_tensor
-        gc.collect()
-        if _DEVICE.type == "cuda":
-            torch.cuda.empty_cache()
+    vector = [float(value) for value in raw_dense]
+    if not vector:
+        raise RuntimeError("Embedding vector is empty")
+    return vector
 
 
-def _embed_with_hf_cls_legacy(
+def _embed_with_bgem3_hybrid(
     text: str,
     model_name: str,
     max_length: int,
-    truncation: bool,
-    padding: bool,
-    normalize: bool,
-) -> list[float]:
-    model, tokenizer = _get_model_and_tokenizer(model_name)
-    inputs = outputs = embeddings = vector_tensor = None
+) -> EmbeddingResult:
+    model = _get_bgem3_model(model_name)
 
     try:
-        inputs = _tokenize_text(
-            tokenizer=tokenizer,
-            text=text,
+        output = model.encode(
+            [text],
+            batch_size=1,
             max_length=max_length,
-            truncation=truncation,
-            padding=padding,
+            return_dense=True,
+            return_sparse=True,
+            return_colbert_vecs=False,
         )
 
-        with torch.inference_mode():
-            outputs = model(**inputs)
-            embeddings = outputs.last_hidden_state[:, 0]
+        dense_vector = _coerce_dense_vector(output["dense_vecs"])
+        lexical_weights = output.get("lexical_weights") or [{}]
+        if isinstance(lexical_weights, list):
+            lexical_weights = lexical_weights[0] if lexical_weights else {}
+        sparse_vector = _coerce_sparse_vector(lexical_weights)
 
-            if normalize:
-                embeddings = F.normalize(embeddings, p=2, dim=1)
-
-        vector_tensor = embeddings[0].detach().cpu()
-        vector = vector_tensor.tolist()
-        if not vector:
-            raise RuntimeError("Embedding vector is empty")
-        return vector
-
-    except torch.cuda.OutOfMemoryError as exc:
-        logger.exception(
-            "CUDA OOM during embedding. model=%s, backend=hf_cls_legacy, max_length=%s, device=%s",
-            model_name,
-            max_length,
-            _DEVICE,
+        return EmbeddingResult(
+            dense_vector=dense_vector,
+            sparse_vector=sparse_vector,
         )
-        _clear_cuda_cache()
-        gc.collect()
-        raise RuntimeError(
-            f"GPU OOM while embedding text (model={model_name}, backend=hf_cls_legacy, max_length={max_length})"
-        ) from exc
 
+    except Exception as exc:
+        if torch is not None and isinstance(exc, torch.cuda.OutOfMemoryError):
+            logger.exception(
+                "CUDA OOM during embedding. model=%s, backend=bgem3_hybrid, max_length=%s, device=%s",
+                model_name,
+                max_length,
+                _DEVICE,
+            )
+            _clear_cuda_cache()
+            gc.collect()
+            raise RuntimeError(
+                f"GPU OOM while embedding text (model={model_name}, backend=bgem3_hybrid, max_length={max_length})"
+            ) from exc
+        raise
     finally:
-        del inputs, outputs, embeddings, vector_tensor
         gc.collect()
-        if _DEVICE.type == "cuda":
+        if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
             torch.cuda.empty_cache()
 
 
 def bge_m3_embedder(
     text: str,
     model_name: str = "BAAI/bge-m3",
-    padding: bool = False,
-    truncation: bool = True,
-    normalize: bool = True,
     max_length: int | None = None,
     backend: str | None = None,
-) -> list[float]:
+) -> EmbeddingResult:
     """
-    Embeds text with a selectable backend so retrieval quality can be compared
-    without losing the legacy path.
+    Generate dense and sparse embeddings from BGE-M3 using FlagEmbedding.
     """
     normalized_text = _validate_text(text)
     resolved_backend = backend or get_embedding_backend()
     resolved_max_length = max_length or get_embedding_max_tokens()
 
-    if resolved_backend == "hf_mean_pooling":
-        return _embed_with_hf_mean_pooling(
+    if resolved_backend == "bgem3_hybrid":
+        return _embed_with_bgem3_hybrid(
             text=normalized_text,
             model_name=model_name,
             max_length=resolved_max_length,
-            truncation=truncation,
-            padding=padding,
-            normalize=normalize,
-        )
-
-    if resolved_backend == "hf_cls_legacy":
-        return _embed_with_hf_cls_legacy(
-            text=normalized_text,
-            model_name=model_name,
-            max_length=resolved_max_length,
-            truncation=truncation,
-            padding=padding,
-            normalize=normalize,
         )
 
     raise ValueError(f"Unsupported embedding backend: {resolved_backend}")

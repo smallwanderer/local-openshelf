@@ -1,10 +1,10 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}인증 메일 재발송 | Openshelf{% endblock %}
+{% block title %}Resend Verification Email | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>인증 메일 재발송</h1>
-<p>가입하신 이메일 주소를 입력해주세요</p>
+<h1>Resend verification email</h1>
+<p>Enter the email address you used when signing up.</p>
 {% endblock %}
 
 {% block auth_body %}
@@ -12,17 +12,17 @@
     {% csrf_token %}
 
     <div class="form-group">
-        <label for="{{ form.email.id_for_label }}">이메일</label>
+        <label for="{{ form.email.id_for_label }}">Email</label>
         {{ form.email }}
         {% if form.email.errors %}
         <p class="field-error">{{ form.email.errors.0 }}</p>
         {% endif %}
     </div>
 
-    <button type="submit" class="btn btn-primary auth-submit">인증 메일 보내기</button>
+    <button type="submit" class="btn btn-primary auth-submit">Send verification email</button>
 </form>
 {% endblock %}
 
 {% block auth_footer %}
-<a href="{% url 'accounts:login' %}">로그인으로 돌아가기</a>
+<a href="{% url 'accounts:login' %}">Back to sign in</a>
 {% endblock %}

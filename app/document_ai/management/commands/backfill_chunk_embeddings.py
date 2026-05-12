@@ -5,6 +5,7 @@ from config.enums import AIStatus
 from document_ai.embedding.embeding_models import bge_m3_embedder
 from document_ai.models import ChunkEmbedding, DocumentChunk
 from document_ai.parsers.config import get_embedding_backend, get_embedding_model
+from document_ai.parsers.text_utils import normalize_extracted_text
 
 
 class Command(BaseCommand):
@@ -14,7 +15,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--backend",
             default=get_embedding_backend(),
-            help="Embedding backend name. Example: hf_cls_legacy, hf_mean_pooling",
+            help="Embedding backend name. Example: bgem3_hybrid",
         )
         parser.add_argument(
             "--model-name",
@@ -75,7 +76,7 @@ class Command(BaseCommand):
         failed_count = 0
 
         for index, chunk in enumerate(chunks, start=1):
-            text = (chunk.text or "").strip()
+            text = normalize_extracted_text(chunk.text or "")
             if not text:
                 failed_count += 1
                 self.stdout.write(
@@ -84,7 +85,7 @@ class Command(BaseCommand):
                 continue
 
             try:
-                vector = bge_m3_embedder(
+                embedding = bge_m3_embedder(
                     text=text,
                     model_name=model_name,
                     backend=backend,
@@ -94,7 +95,8 @@ class Command(BaseCommand):
                     model_name=model_name,
                     model_version=backend,
                     defaults={
-                        "vector": vector,
+                        "vector": embedding.dense_vector,
+                        "sparse_vector": embedding.sparse_vector,
                         "embedded_at": timezone.now(),
                         "status": AIStatus.COMPLETED,
                         "error_message": "",
@@ -110,6 +112,7 @@ class Command(BaseCommand):
                     model_version=backend,
                     defaults={
                         "vector": None,
+                        "sparse_vector": {},
                         "embedded_at": None,
                         "status": AIStatus.FAILED,
                         "error_message": str(exc)[:255],

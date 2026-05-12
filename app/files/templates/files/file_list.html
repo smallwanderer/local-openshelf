@@ -1033,6 +1033,15 @@
     });
   }
 
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function renderAIResults(results) {
     const aiContainer = document.getElementById('aiResultsContainer');
     const fileCount = document.getElementById('fileCount');
@@ -1053,13 +1062,15 @@
         res.evidences.forEach(ev => {
           const sectionSnippet = ev.section ? ` - ${ev.section}` : '';
           const pagesSnippet = ev.pages && ev.pages !== 'None' ? `[${ev.pages}p]` : '';
-          const safeText = ev.text ? ev.text.substring(0, 150) + (ev.text.length > 150 ? '...' : '') : '';
+          const rawContext = ev.context_text || ev.text || '';
+          const truncatedContext = rawContext.length > 240 ? `${rawContext.substring(0, 240)}...` : rawContext;
+          const safeText = escapeHtml(truncatedContext).replace(/\n/g, '<br>');
           evidencesHtml += `
             <div style="margin-bottom:6px; padding:8px; background:var(--bg); border-radius:6px; font-size:12px; color:var(--text);">
               <span style="font-weight:600; color:var(--accent);">
-                ${pagesSnippet}${sectionSnippet}
+                ${escapeHtml(pagesSnippet + sectionSnippet)}
               </span>
-              ${safeText}
+              <div style="margin-top:4px; line-height:1.45;">${safeText}</div>
             </div>
           `;
         });
@@ -1070,7 +1081,7 @@
       card.innerHTML = `
         <div class="ai-title">
           <a href="/files/${res.node_id}/" style="text-decoration: none; color: inherit;">
-            📄 ${res.node_name}
+            📄 ${escapeHtml(res.node_name)}
           </a>
           <span style="font-size: 11px; font-weight: normal; color: var(--muted);">Score: ${docScore}</span>
         </div>
@@ -1078,7 +1089,7 @@
           ${evidencesHtml}
         </div>
         <div class="ai-meta" style="margin-top:6px;">
-          <span>${(res.file_ext || '문서').toUpperCase()}</span>
+          <span>${escapeHtml((res.file_ext || '문서').toUpperCase())}</span>
         </div>
       `;
       aiContainer.appendChild(card);
@@ -1153,6 +1164,7 @@
 
         const sizeStr = isDir ? '폴더' : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
+        const aiStatusLabel = !isDir && file.ai_status ? file.ai_status.embedding_label : '';
 
         const card = document.createElement('div');
         card.className = 'file-card';
@@ -1185,6 +1197,7 @@
             <div class="card-meta">
               <span>${sizeStr}</span>
               <span>${dateStr}</span>
+              ${aiStatusLabel ? `<span>${escapeHtml(aiStatusLabel)}</span>` : ''}
             </div>
           </a>
 
@@ -1220,6 +1233,7 @@
 
         const sizeStr = isDir ? '폴더' : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
+        const aiStatusLabel = !isDir && file.ai_status ? file.ai_status.embedding_label : '';
 
         const tr = document.createElement('tr');
         tr.setAttribute('data-name', file.name.toLowerCase());
@@ -1242,7 +1256,10 @@
               <div class="file-type-icon">
                 <img src="${iconSrc2}" alt="icon" style="width:100%;height:100%;object-fit:contain;">
               </div>
-              <span class="file-name-text">${file.name}</span>
+              <div style="min-width:0;">
+                <span class="file-name-text">${file.name}</span>
+                ${aiStatusLabel ? `<div class="meta-text" style="margin-top:2px;">${escapeHtml(aiStatusLabel)}</div>` : ''}
+              </div>
             </a>
           </td>
           <td class="meta-text">${fileType.toUpperCase()}</td>

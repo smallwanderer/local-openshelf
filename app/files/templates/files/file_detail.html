@@ -41,7 +41,6 @@
     padding: 24px;
     border-bottom: 1px solid var(--border);
   }
-  /* .detail-icon styles moved to base.html */
   .detail-title h2 {
     font-size: 18px;
     font-weight: 600;
@@ -89,10 +88,8 @@
 {% endblock %}
 
 {% block files_body %}
-
-<!-- 브레드크럼 -->
 <div class="breadcrumb">
-  <a href="{% url 'files:index' %}">📁 내 파일</a>
+  <a href="{% url 'files:index' %}">All files</a>
   {% if breadcrumbs %}
     {% for crumb in breadcrumbs %}
       <span class="sep">/</span>
@@ -122,36 +119,43 @@
     </div>
     <div class="detail-title">
       <h2>{{ file.name }}</h2>
-      <p>{{ file.mime_type|default:"알 수 없는 형식" }}</p>
+      <p>{{ file.mime_type|default:"Unknown file type" }}</p>
     </div>
   </div>
   <div class="detail-body">
     <div class="detail-grid">
       <div class="detail-item">
-        <span class="detail-label">파일 크기</span>
+        <span class="detail-label">File Size</span>
         <span class="detail-value">{{ file.size_display }}</span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">업로드 날짜</span>
-        <span class="detail-value">{{ file.created_at|date:"Y년 m월 d일 H:i" }}</span>
+        <span class="detail-label">Uploaded At</span>
+        <span class="detail-value">{{ file.created_at|date:"Y-m-d H:i" }}</span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">형식</span>
+        <span class="detail-label">Format</span>
         <span class="detail-value">{{ file.mime_type|default:"-" }}</span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">상태</span>
-        <span class="detail-value">{{ file.get_status_display|default:"업로드됨" }}</span>
+        <span class="detail-label">Overall Status</span>
+        <span class="detail-value">{{ file.get_status_display|default:"Uploaded" }}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">Parse Status</span>
+        <span class="detail-value">{{ file.get_ai_status.parse_label|default:"Parsing queued" }}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">Embedding Status</span>
+        <span class="detail-value">{{ file.get_ai_status.embedding_label|default:"Waiting for parsing" }}</span>
       </div>
     </div>
   </div>
   <div class="detail-actions">
     <a href="/files/api/v1/{{ file.uid }}/download/" class="btn btn-primary" style="display:flex; align-items:center; gap:6px;">
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      다운로드
+      Download
     </a>
-    <a href="{% url 'files:index' %}" class="btn btn-secondary">← 목록으로</a>
+    <a href="{% url 'files:index' %}" class="btn btn-secondary">Back to files</a>
   </div>
 </div>
-
 {% endblock %}

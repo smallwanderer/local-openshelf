@@ -1,10 +1,10 @@
 {% extends "accounts/base.html" %}
 
-{% block title %}로그인 | Openshelf{% endblock %}
+{% block title %}Sign In | Openshelf{% endblock %}
 
 {% block auth_header %}
-<h1>다시 오셨군요</h1>
-<p>Openshelf에 로그인하세요</p>
+<h1>Welcome back</h1>
+<p>Sign in to continue using Openshelf.</p>
 {% endblock %}
 
 {% block auth_body %}
@@ -12,7 +12,7 @@
     {% csrf_token %}
 
     <div class="form-group">
-        <label for="{{ form.username.id_for_label }}">이메일</label>
+        <label for="{{ form.username.id_for_label }}">Email</label>
         {{ form.username }}
         {% if form.username.errors %}
         <p class="field-error">{{ form.username.errors.0 }}</p>
@@ -20,7 +20,7 @@
     </div>
 
     <div class="form-group">
-        <label for="{{ form.password.id_for_label }}">비밀번호</label>
+        <label for="{{ form.password.id_for_label }}">Password</label>
         {{ form.password }}
         {% if form.password.errors %}
         <p class="field-error">{{ form.password.errors.0 }}</p>
@@ -31,15 +31,16 @@
     <p class="field-error">{{ form.non_field_errors.0 }}</p>
     {% endif %}
 
-    <button type="submit" class="btn btn-primary auth-submit">로그인</button>
+    <button type="submit" class="btn btn-primary auth-submit">Sign in</button>
 </form>
 
 <div style="margin-top: 12px; text-align: center;">
-    <a href="{% url 'accounts:resend_verification' %}" style="font-size: 13px; color: var(--muted);">인증 메일을 받지
-        못하셨나요?</a>
+    <a href="{% url 'accounts:resend_verification' %}" style="font-size: 13px; color: var(--muted);">
+        Did not receive your verification email?
+    </a>
 </div>
 {% endblock %}
 
 {% block auth_footer %}
-계정이 없으신가요? <a href="{% url 'accounts:signup' %}">회원가입</a>
+Need an account? <a href="{% url 'accounts:signup' %}">Create one</a>
 {% endblock %}

@@ -14,7 +14,7 @@ def get_embedding_model():
     return getattr(settings, "EMBEDDING_MODEL", "BAAI/bge-m3")
 
 def get_embedding_backend() -> str:
-    return getattr(settings, "EMBEDDING_BACKEND", "hf_mean_pooling")
+    return getattr(settings, "EMBEDDING_BACKEND", "bgem3_hybrid")
 
 def get_chunk_max_tokens() -> int:
     return getattr(settings, "CHUNK_MAX_TOKENS", getattr(settings, "MAX_TOKENS", 1024))

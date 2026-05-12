@@ -1,0 +1,27 @@
+{% extends "accounts/base.html" %}
+
+{% block title %}Email Verification Required | Openshelf{% endblock %}
+
+{% block auth_header %}
+<h1>Email verification is required</h1>
+<p>Please verify your email address before continuing to browse or upload files.</p>
+{% endblock %}
+
+{% block auth_body %}
+<p style="font-size: 14px; color: var(--muted); line-height: 1.7; text-align: center; margin-bottom: 20px;">
+    We sent a verification link to the email address used during signup.<br>
+    If you did not receive it, you can request another verification email below.
+</p>
+
+<a
+    href="{% url 'accounts:resend_verification' %}"
+    class="btn btn-primary auth-submit"
+    style="display: flex; justify-content: center;"
+>
+    Resend verification email
+</a>
+{% endblock %}
+
+{% block auth_footer %}
+<a href="{% url 'accounts:login' %}">Back to sign in</a>
+{% endblock %}
