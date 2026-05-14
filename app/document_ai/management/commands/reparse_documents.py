@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from config.enums import NodeType
-from document_ai.task import parse_document_with_docling
+from document_ai.tasks import parse_document_with_docling
 from files.models import Node
 
 

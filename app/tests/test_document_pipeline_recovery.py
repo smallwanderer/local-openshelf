@@ -9,9 +9,11 @@ from django.utils import timezone
 
 from config.enums import AIStatus, NodeType
 from document_ai.models import ChunkEmbedding, DocumentChunk, DocumentParseResult
-from document_ai.task import (
+from document_ai.tasks import (
     _get_embedding_recovery_chunk_ids,
+    _get_node_ids_for_chunks,
     _get_parse_recovery_node_ids,
+    _try_acquire_recovery_lock,
     recover_document_pipeline_backlog,
 )
 from files.models import FileBlob, Node
@@ -165,19 +167,126 @@ class DocumentPipelineRecoveryTests(TestCase):
         )
         DocumentChunk.objects.filter(pk=failed_chunk.pk).update(created_at=timezone.now() - timedelta(hours=1))
 
-        with patch("document_ai.task._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
-            "document_ai.task._get_embedding_recovery_chunk_ids",
+        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.tasks._get_embedding_recovery_chunk_ids",
             return_value=[failed_chunk.id],
-        ), patch("document_ai.task.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.task.embedding_document_with_bge.apply_async"
-        ) as embed_apply_async:
+        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
+            "document_ai.tasks.enqueue_embedding_tasks.delay"
+        ) as enqueue_delay, patch("document_ai.tasks._redis_client") as mock_redis_ctor:
+            # Redis 락 항상 성공 (중복 없음)
+            mock_redis_ctor.return_value.set.return_value = True
             result = recover_document_pipeline_backlog()
 
         failed_chunk.refresh_from_db()
 
         parse_delay.assert_called_once_with(parse_node.id)
-        embed_apply_async.assert_called_once_with(args=[failed_chunk.id], queue="embed")
+        # 복구 흐름: chunk → node 단위로 묶어 enqueue_embedding_tasks 경유
+        # enqueue_embedding_tasks 가 PENDING→PROCESSING 전환 후 임베딩 큐잉을 담당함
+        enqueue_delay.assert_called_once_with(embed_node.id)
         self.assertEqual(failed_chunk.status, AIStatus.PENDING)
         self.assertEqual(failed_chunk.error_message, {})
         self.assertEqual(result["parse_requeued"], 1)
-        self.assertEqual(result["embedding_requeued"], 1)
+        self.assertEqual(result["parse_skipped_dedup"], 0)
+        self.assertEqual(result["embedding_nodes_requeued"], 1)
+        self.assertEqual(result["embedding_nodes_skipped_dedup"], 0)
+
+    def test_get_node_ids_for_chunks_returns_distinct_node_ids(self):
+        """_get_node_ids_for_chunks는 여러 첩크가 같은 node에 속해도 node_id를 중복 없이 반환합니다."""
+        node = self._create_file_node("multi-chunk.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=node,
+            status=AIStatus.COMPLETED,
+            chunk_count=2,
+        )
+        chunk_a = DocumentChunk.objects.create(
+            parse_result=parse_result, chunk_index=0, text="a", status=AIStatus.FAILED
+        )
+        chunk_b = DocumentChunk.objects.create(
+            parse_result=parse_result, chunk_index=1, text="b", status=AIStatus.FAILED
+        )
+
+        node_ids = _get_node_ids_for_chunks([chunk_a.id, chunk_b.id])
+
+        self.assertEqual(node_ids, [node.id])
+
+    def test_get_node_ids_for_chunks_empty_input(self):
+        node_ids = _get_node_ids_for_chunks([])
+        self.assertEqual(node_ids, [])
+
+    def test_recovery_task_skips_nodes_when_redis_lock_already_held(self):
+        """Redis 락이 이미 존재하면 해당 node 에 대한 재큐잉을 건너뜁니다."""
+        parse_node = self._create_file_node("dedup-parse.txt")
+
+        embed_node = self._create_file_node("dedup-embed.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=embed_node,
+            status=AIStatus.COMPLETED,
+            chunk_count=1,
+            metadata={"embedding_backend": "bgem3_hybrid"},
+        )
+        stale_chunk = DocumentChunk.objects.create(
+            parse_result=parse_result,
+            chunk_index=0,
+            text="dedup chunk",
+            status=AIStatus.FAILED,
+            error_message={"message": "boom"},
+        )
+        DocumentChunk.objects.filter(pk=stale_chunk.pk).update(
+            created_at=timezone.now() - timedelta(hours=1)
+        )
+
+        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.tasks._get_embedding_recovery_chunk_ids",
+            return_value=[stale_chunk.id],
+        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
+            "document_ai.tasks.enqueue_embedding_tasks.delay"
+        ) as enqueue_delay, patch("document_ai.tasks._redis_client") as mock_redis_ctor:
+            # Redis SET NX 실패 → 락이 이미 존재 (중복 큐잉 방지)
+            mock_redis_ctor.return_value.set.return_value = None
+            result = recover_document_pipeline_backlog()
+
+        parse_delay.assert_not_called()
+        enqueue_delay.assert_not_called()
+        self.assertEqual(result["parse_requeued"], 0)
+        self.assertEqual(result["parse_skipped_dedup"], 1)
+        self.assertEqual(result["embedding_nodes_requeued"], 0)
+        self.assertEqual(result["embedding_nodes_skipped_dedup"], 1)
+
+    def test_recovery_task_proceeds_without_dedup_when_redis_unavailable(self):
+        """Redis 연결 실패 시 dedup 없이 복구 작업을 정상 수행합니다."""
+        parse_node = self._create_file_node("redis-down-parse.txt")
+
+        embed_node = self._create_file_node("redis-down-embed.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=embed_node,
+            status=AIStatus.COMPLETED,
+            chunk_count=1,
+            metadata={"embedding_backend": "bgem3_hybrid"},
+        )
+        stale_chunk = DocumentChunk.objects.create(
+            parse_result=parse_result,
+            chunk_index=0,
+            text="redis down chunk",
+            status=AIStatus.FAILED,
+            error_message={"message": "boom"},
+        )
+        DocumentChunk.objects.filter(pk=stale_chunk.pk).update(
+            created_at=timezone.now() - timedelta(hours=1)
+        )
+
+        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.tasks._get_embedding_recovery_chunk_ids",
+            return_value=[stale_chunk.id],
+        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
+            "document_ai.tasks.enqueue_embedding_tasks.delay"
+        ) as enqueue_delay, patch(
+            "document_ai.tasks._redis_client",
+            side_effect=Exception("connection refused"),
+        ):
+            result = recover_document_pipeline_backlog()
+
+        # Redis 없이도 정상 큐잉
+        parse_delay.assert_called_once_with(parse_node.id)
+        enqueue_delay.assert_called_once_with(embed_node.id)
+        self.assertEqual(result["parse_requeued"], 1)
+        self.assertEqual(result["embedding_nodes_requeued"], 1)

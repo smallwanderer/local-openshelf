@@ -41,10 +41,8 @@ _load_env_file(ENV_FILE)
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
-    "django-insecure-tvwxxuu7kl-7a3!=xehdfacz+yeav)g!@t+lntm)^f15p)+r62",
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -75,6 +73,7 @@ INSTALLED_APPS = [
     'document_ai.apps.DocumentAiConfig',
     'rest_framework',
     'drf_yasg',
+    'django_celery_results',
 ]
 
 LOGIN_URL = '/accounts/login/'
@@ -120,8 +119,12 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Celery
+CELERY_TIMEZONE = 'Asia/Seoul'
+CELERY_ENABLE_UTC = False
+
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+CELERY_RESULT_BACKEND = "django-db"
+CELERY_RESULT_EXTENDED = True  # args, kwargs, worker, retries 등 상세 정보 저장
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 60 * 30
 DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS = int(os.getenv("DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS", "300"))
@@ -130,10 +133,33 @@ DOCUMENT_AI_RECOVERY_PARSE_BATCH_SIZE = int(os.getenv("DOCUMENT_AI_RECOVERY_PARS
 DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE = int(os.getenv("DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE", "200"))
 CELERY_BEAT_SCHEDULE = {
     "recover-document-pipeline-backlog": {
-        "task": "document_ai.task.recover_document_pipeline_backlog",
+        "task": "document_ai.tasks.recover_document_pipeline_backlog",
         "schedule": DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS,
     },
 }
+
+
+# Document AI — Parser & Chunker
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "bgem3_hybrid")
+CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "1024"))
+EMBEDDING_TOKEN_HEADROOM = int(os.getenv("EMBEDDING_TOKEN_HEADROOM", "256"))
+# EMBEDDING_MAX_TOKENS: 미설정 시 config.py 가 CHUNK_MAX_TOKENS + HEADROOM 으로 계산
+_embedding_max_tokens_raw = os.getenv("EMBEDDING_MAX_TOKENS")
+if _embedding_max_tokens_raw:
+    EMBEDDING_MAX_TOKENS = int(_embedding_max_tokens_raw)
+
+# Document AI — Retriever (Hybrid Search)
+EMBEDDING_HYBRID_DENSE_WEIGHT = float(os.getenv("EMBEDDING_HYBRID_DENSE_WEIGHT", "0.5"))
+EMBEDDING_HYBRID_SPARSE_WEIGHT = float(os.getenv("EMBEDDING_HYBRID_SPARSE_WEIGHT", "0.5"))
+EMBEDDING_HYBRID_CANDIDATE_MULTIPLIER = int(os.getenv("EMBEDDING_HYBRID_CANDIDATE_MULTIPLIER", "12"))
+EMBEDDING_PER_NODE_CANDIDATE_CAP = int(os.getenv("EMBEDDING_PER_NODE_CANDIDATE_CAP", "4"))
+EMBEDDING_QUERY_SPARSE_TOP_N = int(os.getenv("EMBEDDING_QUERY_SPARSE_TOP_N", "32"))
+EMBEDDING_EVIDENCE_TOP_K = int(os.getenv("EMBEDDING_EVIDENCE_TOP_K", "3"))
+EMBEDDING_DOC_POOL_TOP_K = int(os.getenv("EMBEDDING_DOC_POOL_TOP_K", "5"))
+EMBEDDING_DOC_POOL_TAU = float(os.getenv("EMBEDDING_DOC_POOL_TAU", "5.0"))
+EMBEDDING_DOC_LENGTH_PENALTY_ALPHA = float(os.getenv("EMBEDDING_DOC_LENGTH_PENALTY_ALPHA", "0.10"))
+EMBEDDING_EVIDENCE_CONTEXT_WINDOW = int(os.getenv("EMBEDDING_EVIDENCE_CONTEXT_WINDOW", "1"))
 
 
 # Database

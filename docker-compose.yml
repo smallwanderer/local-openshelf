@@ -1,3 +1,5 @@
+name: openshelf
+
 services:
   db:
     image: pgvector/pgvector:pg16
