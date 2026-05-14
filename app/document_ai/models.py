@@ -74,6 +74,17 @@ class DocumentParseResult(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Recovery Tracking
+    recovery_attempts = models.PositiveIntegerField(
+        default=0,
+        help_text="복구 태스크가 재큐잉한 누적 횟수. MAX 초과 시 복구 후보에서 제외됩니다.",
+    )
+    last_recovered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="마지막으로 복구 태스크가 재큐잉한 시각.",
+    )
+
     class Meta:
         indexes = [
             models.Index(fields=["status"]),
@@ -132,6 +143,17 @@ class DocumentChunk(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Recovery Tracking
+    recovery_attempts = models.PositiveIntegerField(
+        default=0,
+        help_text="임베딩 복구 태스크가 재큐잉한 누적 횟수. MAX 초과 시 복구 후보에서 제외됩니다.",
+    )
+    last_recovered_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="마지막으로 임베딩 복구 태스크가 재큐잉한 시각.",
+    )
 
     class Meta:
         ordering = ["chunk_index"]

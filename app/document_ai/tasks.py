@@ -49,6 +49,10 @@ def _get_recovery_embedding_batch_size() -> int:
     return _get_positive_int_env("DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE", 200)
 
 
+def _get_max_recovery_attempts() -> int:
+    return _get_positive_int_env("DOCUMENT_AI_MAX_RECOVERY_ATTEMPTS", 5)
+
+
 def _recovery_cutoff():
     return timezone.now() - timedelta(minutes=_get_recovery_stale_minutes())
 
@@ -57,6 +61,10 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
     from files.models import Node
 
     cutoff = _recovery_cutoff()
+    max_attempts = _get_max_recovery_attempts()
+
+    # parse_result 가 없는 신규 파일은 attempt 제한 없이 항상 포함
+    # parse_result 가 있는 파일은 staleness + attempt 한계 조건 모두 적용
     node_ids = set(
         Node.objects.select_related("blob", "parse_result")
         .filter(
@@ -66,9 +74,21 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
         )
         .filter(
             Q(parse_result__isnull=True)
-            | Q(parse_result__status=AIStatus.FAILED, parse_result__updated_at__lte=cutoff)
-            | Q(parse_result__status=AIStatus.PENDING, parse_result__updated_at__lte=cutoff)
-            | Q(parse_result__status=AIStatus.PROCESSING, parse_result__updated_at__lte=cutoff)
+            | Q(
+                parse_result__status=AIStatus.FAILED,
+                parse_result__updated_at__lte=cutoff,
+                parse_result__recovery_attempts__lt=max_attempts,
+            )
+            | Q(
+                parse_result__status=AIStatus.PENDING,
+                parse_result__updated_at__lte=cutoff,
+                parse_result__recovery_attempts__lt=max_attempts,
+            )
+            | Q(
+                parse_result__status=AIStatus.PROCESSING,
+                parse_result__updated_at__lte=cutoff,
+                parse_result__recovery_attempts__lt=max_attempts,
+            )
         )
         .order_by("id")
         .values_list("id", flat=True)
@@ -78,6 +98,7 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
         node__blob__isnull=False,
         status=AIStatus.COMPLETED,
         updated_at__lte=cutoff,
+        recovery_attempts__lt=max_attempts,
     ).annotate(
         actual_chunk_rows=Count("chunks", distinct=True),
     ).filter(
@@ -89,6 +110,7 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
 
 def _get_embedding_recovery_chunk_ids(limit: int) -> list[int]:
     cutoff = _recovery_cutoff()
+    max_attempts = _get_max_recovery_attempts()
     backend = get_embedding_backend()
     model_name = get_embedding_model()
 
@@ -106,6 +128,7 @@ def _get_embedding_recovery_chunk_ids(limit: int) -> list[int]:
         .filter(
             parse_result__node__trashed=False,
             parse_result__status=AIStatus.COMPLETED,
+            recovery_attempts__lt=max_attempts,
         )
         .filter(
             Q(status=AIStatus.PENDING, updated_at__lte=cutoff)
@@ -173,6 +196,7 @@ def recover_document_pipeline_backlog() -> dict:
     parse_node_ids = _get_parse_recovery_node_ids(parse_limit)
     recovered_parse_count = 0
     skipped_parse_count = 0
+    queued_parse_node_ids = []
     for node_id in parse_node_ids:
         if redis is not None:
             lock_key = f"recovery:parse:{node_id}"
@@ -181,7 +205,16 @@ def recover_document_pipeline_backlog() -> dict:
                 logger.debug("Parse recovery dedup skip: node_id=%s", node_id)
                 continue
         parse_document_with_docling.delay(node_id)
+        queued_parse_node_ids.append(node_id)
         recovered_parse_count += 1
+
+    # 파싱 복구 메타데이터 업데이트 (재큐잉된 parse result 만)
+    if queued_parse_node_ids:
+        now = timezone.now()
+        DocumentParseResult.objects.filter(node_id__in=queued_parse_node_ids).update(
+            recovery_attempts=F("recovery_attempts") + 1,
+            last_recovered_at=now,
+        )
 
     # --- 임베딩 복구 ---
     # 복구된 청크를 node 단위로 묶어 enqueue_embedding_tasks 를 경유합니다.
@@ -190,9 +223,21 @@ def recover_document_pipeline_backlog() -> dict:
     # (기존: embedding_document_with_bge 를 직접 호출 → PROCESSING 상태가 아니어서 skip 됨)
     chunk_ids = _get_embedding_recovery_chunk_ids(embed_limit)
     reset_count = _reset_chunks_to_pending(chunk_ids)
-    embed_node_ids = _get_node_ids_for_chunks(chunk_ids)
+
+    # chunk_id → node_id 매핑을 미리 구성해 dedup skip 된 노드의 청크는 제외
+    chunk_to_node = dict(
+        DocumentChunk.objects
+        .filter(id__in=chunk_ids)
+        .values_list("id", "parse_result__node_id")
+    ) if chunk_ids else {}
+    node_to_chunks: dict[int, list[int]] = {}
+    for cid, nid in chunk_to_node.items():
+        node_to_chunks.setdefault(nid, []).append(cid)
+
+    embed_node_ids = list(node_to_chunks.keys())
     recovered_embed_count = 0
     skipped_embed_count = 0
+    queued_embed_chunk_ids: list[int] = []
     for node_id in embed_node_ids:
         if redis is not None:
             lock_key = f"recovery:embed:{node_id}"
@@ -201,7 +246,16 @@ def recover_document_pipeline_backlog() -> dict:
                 logger.debug("Embed recovery dedup skip: node_id=%s", node_id)
                 continue
         enqueue_embedding_tasks.delay(node_id)
+        queued_embed_chunk_ids.extend(node_to_chunks.get(node_id, []))
         recovered_embed_count += 1
+
+    # 임베딩 복구 메타데이터 업데이트 (실제 재큐잉된 청크만)
+    if queued_embed_chunk_ids:
+        now = timezone.now()
+        DocumentChunk.objects.filter(id__in=queued_embed_chunk_ids).update(
+            recovery_attempts=F("recovery_attempts") + 1,
+            last_recovered_at=now,
+        )
 
     summary = {
         "status": "success",
@@ -211,9 +265,11 @@ def recover_document_pipeline_backlog() -> dict:
         "embedding_nodes_skipped_dedup": skipped_embed_count,
         "chunks_reset_to_pending": reset_count,
         "stale_minutes": stale_minutes,
+        "max_recovery_attempts": _get_max_recovery_attempts(),
     }
     logger.info("Recovered document pipeline backlog: %s", summary)
     return summary
+
 
 
 def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:

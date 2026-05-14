@@ -75,6 +75,7 @@ INSTALLED_APPS = [
     'document_ai.apps.DocumentAiConfig',
     'rest_framework',
     'drf_yasg',
+    'django_celery_results',
 ]
 
 LOGIN_URL = '/accounts/login/'
@@ -124,7 +125,8 @@ CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_ENABLE_UTC = False
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+CELERY_RESULT_BACKEND = "django-db"
+CELERY_RESULT_EXTENDED = True  # args, kwargs, worker, retries 등 상세 정보 저장
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 60 * 30
 DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS = int(os.getenv("DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS", "300"))

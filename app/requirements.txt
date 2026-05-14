@@ -5,6 +5,7 @@ psycopg[binary]==3.*
 celery[redis]==5.*
 redis==5.*
 redis-semaphore==0.2.2
+django-celery-results==2.*
 
 docling==2.*
 torchvision==0.*
