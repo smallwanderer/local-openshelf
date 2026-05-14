@@ -11,6 +11,7 @@ from config.enums import AIStatus, NodeType
 from document_ai.models import ChunkEmbedding, DocumentChunk, DocumentParseResult
 from document_ai.tasks import (
     _get_embedding_recovery_chunk_ids,
+    _get_node_ids_for_chunks,
     _get_parse_recovery_node_ids,
     recover_document_pipeline_backlog,
 )
@@ -169,15 +170,40 @@ class DocumentPipelineRecoveryTests(TestCase):
             "document_ai.tasks._get_embedding_recovery_chunk_ids",
             return_value=[failed_chunk.id],
         ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.tasks.embedding_document_with_bge.apply_async"
-        ) as embed_apply_async:
+            "document_ai.tasks.enqueue_embedding_tasks.delay"
+        ) as enqueue_delay:
             result = recover_document_pipeline_backlog()
 
         failed_chunk.refresh_from_db()
 
         parse_delay.assert_called_once_with(parse_node.id)
-        embed_apply_async.assert_called_once_with(args=[failed_chunk.id], queue="embed")
+        # 복구 흐름: chunk → node 단위로 묶어 enqueue_embedding_tasks 경유
+        # enqueue_embedding_tasks 가 PENDING→PROCESSING 전환 후 임베딩 큐잉을 담당함
+        enqueue_delay.assert_called_once_with(embed_node.id)
         self.assertEqual(failed_chunk.status, AIStatus.PENDING)
         self.assertEqual(failed_chunk.error_message, {})
         self.assertEqual(result["parse_requeued"], 1)
-        self.assertEqual(result["embedding_requeued"], 1)
+        self.assertEqual(result["embedding_nodes_requeued"], 1)
+
+    def test_get_node_ids_for_chunks_returns_distinct_node_ids(self):
+        """_get_node_ids_for_chunks는 여러 첩크가 같은 node에 속해도 node_id를 중복 없이 반환합니다."""
+        node = self._create_file_node("multi-chunk.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=node,
+            status=AIStatus.COMPLETED,
+            chunk_count=2,
+        )
+        chunk_a = DocumentChunk.objects.create(
+            parse_result=parse_result, chunk_index=0, text="a", status=AIStatus.FAILED
+        )
+        chunk_b = DocumentChunk.objects.create(
+            parse_result=parse_result, chunk_index=1, text="b", status=AIStatus.FAILED
+        )
+
+        node_ids = _get_node_ids_for_chunks([chunk_a.id, chunk_b.id])
+
+        self.assertEqual(node_ids, [node.id])
+
+    def test_get_node_ids_for_chunks_empty_input(self):
+        node_ids = _get_node_ids_for_chunks([])
+        self.assertEqual(node_ids, [])

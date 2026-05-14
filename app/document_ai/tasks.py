@@ -127,6 +127,18 @@ def _reset_chunks_to_pending(chunk_ids: list[int]) -> int:
     )
 
 
+def _get_node_ids_for_chunks(chunk_ids: list[int]) -> list[int]:
+    """chunk_ids에 해당하는 고유 node_id 목록을 반환합니다."""
+    if not chunk_ids:
+        return []
+    return list(
+        DocumentChunk.objects
+        .filter(id__in=chunk_ids)
+        .values_list("parse_result__node_id", flat=True)
+        .distinct()
+    )
+
+
 @shared_task(queue="parse")
 def recover_document_pipeline_backlog() -> dict:
     parse_limit = _get_recovery_parse_batch_size()
@@ -140,15 +152,21 @@ def recover_document_pipeline_backlog() -> dict:
 
     chunk_ids = _get_embedding_recovery_chunk_ids(embed_limit)
     reset_count = _reset_chunks_to_pending(chunk_ids)
+
+    # 복구된 청크를 node 단위로 묶어 enqueue_embedding_tasks 를 경유합니다.
+    # enqueue_embedding_tasks 는 PENDING 청크를 PROCESSING 으로 전환한 뒤
+    # embedding_document_with_bge 를 큐에 넣으므로, 상태 검사를 올바르게 통과합니다.
+    # (기존: embedding_document_with_bge 를 직접 호출 → PROCESSING 상태가 아니어서 skip 됨)
+    embed_node_ids = _get_node_ids_for_chunks(chunk_ids)
     recovered_embed_count = 0
-    for chunk_id in chunk_ids:
-        embedding_document_with_bge.apply_async(args=[chunk_id], queue="embed")
+    for node_id in embed_node_ids:
+        enqueue_embedding_tasks.delay(node_id)
         recovered_embed_count += 1
 
     summary = {
         "status": "success",
         "parse_requeued": recovered_parse_count,
-        "embedding_requeued": recovered_embed_count,
+        "embedding_nodes_requeued": recovered_embed_count,
         "chunks_reset_to_pending": reset_count,
         "stale_minutes": _get_recovery_stale_minutes(),
     }
