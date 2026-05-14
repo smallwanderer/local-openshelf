@@ -141,6 +141,29 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 
+# Document AI — Parser & Chunker
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+EMBEDDING_BACKEND = os.getenv("EMBEDDING_BACKEND", "bgem3_hybrid")
+CHUNK_MAX_TOKENS = int(os.getenv("CHUNK_MAX_TOKENS", "1024"))
+EMBEDDING_TOKEN_HEADROOM = int(os.getenv("EMBEDDING_TOKEN_HEADROOM", "256"))
+# EMBEDDING_MAX_TOKENS: 미설정 시 config.py 가 CHUNK_MAX_TOKENS + HEADROOM 으로 계산
+_embedding_max_tokens_raw = os.getenv("EMBEDDING_MAX_TOKENS")
+if _embedding_max_tokens_raw:
+    EMBEDDING_MAX_TOKENS = int(_embedding_max_tokens_raw)
+
+# Document AI — Retriever (Hybrid Search)
+EMBEDDING_HYBRID_DENSE_WEIGHT = float(os.getenv("EMBEDDING_HYBRID_DENSE_WEIGHT", "0.5"))
+EMBEDDING_HYBRID_SPARSE_WEIGHT = float(os.getenv("EMBEDDING_HYBRID_SPARSE_WEIGHT", "0.5"))
+EMBEDDING_HYBRID_CANDIDATE_MULTIPLIER = int(os.getenv("EMBEDDING_HYBRID_CANDIDATE_MULTIPLIER", "12"))
+EMBEDDING_PER_NODE_CANDIDATE_CAP = int(os.getenv("EMBEDDING_PER_NODE_CANDIDATE_CAP", "4"))
+EMBEDDING_QUERY_SPARSE_TOP_N = int(os.getenv("EMBEDDING_QUERY_SPARSE_TOP_N", "32"))
+EMBEDDING_EVIDENCE_TOP_K = int(os.getenv("EMBEDDING_EVIDENCE_TOP_K", "3"))
+EMBEDDING_DOC_POOL_TOP_K = int(os.getenv("EMBEDDING_DOC_POOL_TOP_K", "5"))
+EMBEDDING_DOC_POOL_TAU = float(os.getenv("EMBEDDING_DOC_POOL_TAU", "5.0"))
+EMBEDDING_DOC_LENGTH_PENALTY_ALPHA = float(os.getenv("EMBEDDING_DOC_LENGTH_PENALTY_ALPHA", "0.10"))
+EMBEDDING_EVIDENCE_CONTEXT_WINDOW = int(os.getenv("EMBEDDING_EVIDENCE_CONTEXT_WINDOW", "1"))
+
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
