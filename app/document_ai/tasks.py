@@ -139,36 +139,78 @@ def _get_node_ids_for_chunks(chunk_ids: list[int]) -> list[int]:
     )
 
 
+def _redis_client():
+    """복구 idempotency 체크용 Redis 클라이언트를 반환합니다."""
+    from redis import Redis
+    redis_url = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+    return Redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
+
+
+def _try_acquire_recovery_lock(redis_client, key: str, ttl_seconds: int) -> bool:
+    """Redis SET NX 로 복구 락을 획득합니다.
+
+    락 획득 성공(중복 아님) → True
+    이미 존재(중복 큐잉 방지 대상) → False
+    """
+    return bool(redis_client.set(key, "1", nx=True, ex=ttl_seconds))
+
+
 @shared_task(queue="parse")
 def recover_document_pipeline_backlog() -> dict:
     parse_limit = _get_recovery_parse_batch_size()
     embed_limit = _get_recovery_embedding_batch_size()
+    stale_minutes = _get_recovery_stale_minutes()
+    lock_ttl = stale_minutes * 60
 
+    # Redis 연결 실패 시 dedup 없이 정상 진행 (graceful fallback)
+    try:
+        redis = _redis_client()
+    except Exception as e:
+        logger.warning("Redis unavailable for recovery dedup, proceeding without dedup: %s", e)
+        redis = None
+
+    # --- 파싱 복구 ---
     parse_node_ids = _get_parse_recovery_node_ids(parse_limit)
     recovered_parse_count = 0
+    skipped_parse_count = 0
     for node_id in parse_node_ids:
+        if redis is not None:
+            lock_key = f"recovery:parse:{node_id}"
+            if not _try_acquire_recovery_lock(redis, lock_key, lock_ttl):
+                skipped_parse_count += 1
+                logger.debug("Parse recovery dedup skip: node_id=%s", node_id)
+                continue
         parse_document_with_docling.delay(node_id)
         recovered_parse_count += 1
 
-    chunk_ids = _get_embedding_recovery_chunk_ids(embed_limit)
-    reset_count = _reset_chunks_to_pending(chunk_ids)
-
+    # --- 임베딩 복구 ---
     # 복구된 청크를 node 단위로 묶어 enqueue_embedding_tasks 를 경유합니다.
     # enqueue_embedding_tasks 는 PENDING 청크를 PROCESSING 으로 전환한 뒤
     # embedding_document_with_bge 를 큐에 넣으므로, 상태 검사를 올바르게 통과합니다.
     # (기존: embedding_document_with_bge 를 직접 호출 → PROCESSING 상태가 아니어서 skip 됨)
+    chunk_ids = _get_embedding_recovery_chunk_ids(embed_limit)
+    reset_count = _reset_chunks_to_pending(chunk_ids)
     embed_node_ids = _get_node_ids_for_chunks(chunk_ids)
     recovered_embed_count = 0
+    skipped_embed_count = 0
     for node_id in embed_node_ids:
+        if redis is not None:
+            lock_key = f"recovery:embed:{node_id}"
+            if not _try_acquire_recovery_lock(redis, lock_key, lock_ttl):
+                skipped_embed_count += 1
+                logger.debug("Embed recovery dedup skip: node_id=%s", node_id)
+                continue
         enqueue_embedding_tasks.delay(node_id)
         recovered_embed_count += 1
 
     summary = {
         "status": "success",
         "parse_requeued": recovered_parse_count,
+        "parse_skipped_dedup": skipped_parse_count,
         "embedding_nodes_requeued": recovered_embed_count,
+        "embedding_nodes_skipped_dedup": skipped_embed_count,
         "chunks_reset_to_pending": reset_count,
-        "stale_minutes": _get_recovery_stale_minutes(),
+        "stale_minutes": stale_minutes,
     }
     logger.info("Recovered document pipeline backlog: %s", summary)
     return summary
