@@ -3,7 +3,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from files.models import FileBlob
-from document_ai.task import parse_document_with_docling
+from document_ai.tasks import parse_document_with_docling
 
 logger = logging.getLogger(__name__)
 

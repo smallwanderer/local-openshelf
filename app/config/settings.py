@@ -120,6 +120,9 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Celery
+CELERY_TIMEZONE = 'Asia/Seoul'
+CELERY_ENABLE_UTC = False
+
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
 CELERY_TASK_TRACK_STARTED = True
@@ -130,7 +133,7 @@ DOCUMENT_AI_RECOVERY_PARSE_BATCH_SIZE = int(os.getenv("DOCUMENT_AI_RECOVERY_PARS
 DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE = int(os.getenv("DOCUMENT_AI_RECOVERY_EMBED_BATCH_SIZE", "200"))
 CELERY_BEAT_SCHEDULE = {
     "recover-document-pipeline-backlog": {
-        "task": "document_ai.task.recover_document_pipeline_backlog",
+        "task": "document_ai.tasks.recover_document_pipeline_backlog",
         "schedule": DOCUMENT_AI_RECOVERY_INTERVAL_SECONDS,
     },
 }

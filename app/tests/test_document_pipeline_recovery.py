@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from config.enums import AIStatus, NodeType
 from document_ai.models import ChunkEmbedding, DocumentChunk, DocumentParseResult
-from document_ai.task import (
+from document_ai.tasks import (
     _get_embedding_recovery_chunk_ids,
     _get_parse_recovery_node_ids,
     recover_document_pipeline_backlog,
@@ -165,11 +165,11 @@ class DocumentPipelineRecoveryTests(TestCase):
         )
         DocumentChunk.objects.filter(pk=failed_chunk.pk).update(created_at=timezone.now() - timedelta(hours=1))
 
-        with patch("document_ai.task._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
-            "document_ai.task._get_embedding_recovery_chunk_ids",
+        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.tasks._get_embedding_recovery_chunk_ids",
             return_value=[failed_chunk.id],
-        ), patch("document_ai.task.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.task.embedding_document_with_bge.apply_async"
+        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
+            "document_ai.tasks.embedding_document_with_bge.apply_async"
         ) as embed_apply_async:
             result = recover_document_pipeline_backlog()
 

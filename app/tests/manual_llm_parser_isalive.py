@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-from document_ai.task import generate_text2sql_response
+from document_ai.tasks import generate_text2sql_response
 
 model = "google/gemma-4-E4B-it"
 system_prompt = (

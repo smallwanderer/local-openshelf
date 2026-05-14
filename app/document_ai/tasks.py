@@ -77,12 +77,11 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
         node__trashed=False,
         node__blob__isnull=False,
         status=AIStatus.COMPLETED,
+        updated_at__lte=cutoff,
     ).annotate(
         actual_chunk_rows=Count("chunks", distinct=True),
     ).filter(
-        Q(chunk_count=0)
-        | Q(actual_chunk_rows=0)
-        | Q(actual_chunk_rows__lt=F("chunk_count"))
+        actual_chunk_rows__lt=F("chunk_count")
     ).values_list("node_id", flat=True)
     node_ids.update(chunk_gap_ids)
     return sorted(node_ids)[:limit]
@@ -109,9 +108,9 @@ def _get_embedding_recovery_chunk_ids(limit: int) -> list[int]:
             parse_result__status=AIStatus.COMPLETED,
         )
         .filter(
-            Q(status=AIStatus.PENDING, created_at__lte=cutoff)
-            | Q(status=AIStatus.FAILED, created_at__lte=cutoff)
-            | Q(status=AIStatus.PROCESSING, created_at__lte=cutoff)
+            Q(status=AIStatus.PENDING, updated_at__lte=cutoff)
+            | Q(status=AIStatus.FAILED, updated_at__lte=cutoff)
+            | Q(status=AIStatus.PROCESSING, updated_at__lte=cutoff)
         )
         .filter(has_completed_embedding=False)
         .order_by("id")
