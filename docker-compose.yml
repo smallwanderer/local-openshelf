@@ -5,16 +5,15 @@ services:
     image: pgvector/pgvector:pg16
     container_name: openshelf-db
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - ./data/pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     ports:
       - "5433:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: [ "CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"" ]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -25,7 +24,7 @@ services:
     container_name: openshelf-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6378:6379"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 3s
@@ -41,11 +40,12 @@ services:
     volumes:
       - ./app:/app
       - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
+        condition: service_started
     expose:
       - "8000"
     command: [ "bash", "-lc", "python manage.py runserver 0.0.0.0:8000" ]
@@ -65,11 +65,12 @@ services:
     volumes:
       - ./app:/app
       - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
+        condition: service_started
     command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed --prefetch-multiplier=1" ]
 
   celery-text2sql-worker:
@@ -81,14 +82,15 @@ services:
     volumes:
       - ./app:/app
       - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
+        condition: service_started
       llm-parser:
-        condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q text2sql --concurrency=${TEXT2SQL_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+        condition: service_started
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q text2sql --concurrency=$${TEXT2SQL_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
   celery-beat:
     build: ./app
@@ -99,11 +101,12 @@ services:
     volumes:
       - ./app:/app
       - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
       redis:
-        condition: service_healthy
+        condition: service_started
     command: [ "bash", "-lc", "celery -A config beat -l info" ]
 
   nginx:
@@ -111,13 +114,13 @@ services:
     container_name: openshelf-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8888:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./data/uploads:/var/www/uploads:ro
     depends_on:
       app:
-        condition: service_healthy
+        condition: service_started
 
   llm-parser:
     build:
@@ -127,8 +130,8 @@ services:
     restart: unless-stopped
     ports:
       - "8081:8080"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
+    env_file:
+      - .env
     volumes:
       - ./llama-cpp-parser/data/cache:/root/.cache
     command: >

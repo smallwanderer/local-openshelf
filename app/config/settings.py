@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'django.contrib.postgres',
     'django.contrib.staticfiles',
 
     'files.apps.FilesConfig',
@@ -117,6 +118,73 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+
+# Logging
+LOG_DIR = Path(os.getenv("LOG_DIR", str(BASE_DIR.parent / "data" / "logs")))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+OPERATION_LOG_LEVEL = os.getenv("OPERATION_LOG_LEVEL", "WARNING")
+DOCUMENT_AI_LOG_LEVEL = os.getenv("DOCUMENT_AI_LOG_LEVEL", "INFO")
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s %(process)d %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+        "operations_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": OPERATION_LOG_LEVEL,
+            "filename": LOG_DIR / "operations.log",
+            "maxBytes": 10 * 1024 * 1024,
+            "backupCount": 5,
+            "formatter": "standard",
+            "encoding": "utf-8",
+        },
+        "document_ai_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": DOCUMENT_AI_LOG_LEVEL,
+            "filename": LOG_DIR / "document_ai.log",
+            "maxBytes": 10 * 1024 * 1024,
+            "backupCount": 5,
+            "formatter": "standard",
+            "encoding": "utf-8",
+        },
+    },
+    "root": {
+        "handlers": ["console", "operations_file"],
+        "level": OPERATION_LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "operations_file"],
+            "level": OPERATION_LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console", "operations_file"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "celery": {
+            "handlers": ["console", "operations_file"],
+            "level": OPERATION_LOG_LEVEL,
+            "propagate": False,
+        },
+        "document_ai": {
+            "handlers": ["console", "operations_file", "document_ai_file"],
+            "level": DOCUMENT_AI_LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}
 
 # Celery
 CELERY_TIMEZONE = 'Asia/Seoul'

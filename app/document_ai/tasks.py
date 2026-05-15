@@ -351,6 +351,15 @@ def save_parse_result(node, pr: ParseResult) -> DocumentParseResult:
                 f"Chunk count mismatch: expected {expected_chunk_count}, got {actual_chunk_count}"
             )
 
+        logger.info(
+            "Chunks saved: node_id=%s, parse_result_id=%s, status=%s, chunks=%s, parser_mode=%s",
+            node.id,
+            doc_result.id,
+            parse_status,
+            actual_chunk_count,
+            pr.parser_mode or "",
+        )
+
         return doc_result
 
 
@@ -393,6 +402,8 @@ def parse_document_with_docling(node_id: int) -> dict:
 
         file_path = node.blob.file.path
 
+        logger.info("Parse started: node_id=%s", node_id)
+
         # 1. 파서 호출 (순수 Pydantic 결과)
         parse_result = parse_document_entry(file_path)
 
@@ -400,6 +411,14 @@ def parse_document_with_docling(node_id: int) -> dict:
         doc_result = save_parse_result(node, parse_result)
 
         enqueue_embedding_tasks.delay(node_id)
+
+        logger.info(
+            "Parse completed: node_id=%s, status=%s, chunks=%s, parser_mode=%s",
+            node_id,
+            doc_result.status,
+            doc_result.chunk_count,
+            parse_result.parser_mode or "",
+        )
 
         return {
             "status": "success",
@@ -459,6 +478,7 @@ def enqueue_embedding_tasks(node_id: int) -> dict:
             )
 
             if not chunk_ids:
+                logger.info("Embedding queue skipped: node_id=%s, reason=no_pending_chunks", node_id)
                 return {
                     "status": "success",
                     "node_id": node_id,
@@ -472,6 +492,12 @@ def enqueue_embedding_tasks(node_id: int) -> dict:
 
         for chunk_id in chunk_ids:
             embedding_document_with_bge.apply_async(args=[chunk_id], queue="embed")
+
+        logger.info(
+            "Embedding queued: node_id=%s, chunks=%s",
+            node_id,
+            len(chunk_ids),
+        )
 
         return {
             "status": "success",
@@ -525,6 +551,16 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         if not text:
             raise ValueError("Chunk text is empty")
 
+        logger.info(
+            "Embedding started: chunk_id=%s, node_id=%s, chunk_index=%s, tokens=%s, model=%s, backend=%s",
+            chunk_id,
+            chunk.parse_result.node_id,
+            chunk.chunk_index,
+            chunk.token_count,
+            embedding_model,
+            embedding_backend,
+        )
+
         from document_ai.embedding.embeding_models import bge_m3_embedder
 
         embedding = bge_m3_embedder(
@@ -549,6 +585,16 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
         chunk.status = AIStatus.COMPLETED
         chunk.error_message = ""
         chunk.save(update_fields=["status", "error_message"])
+
+        logger.info(
+            "Embedding completed: chunk_id=%s, node_id=%s, dense_dim=%s, sparse_terms=%s, model=%s, backend=%s",
+            chunk_id,
+            chunk.parse_result.node_id,
+            len(embedding.dense_vector),
+            len(embedding.sparse_vector),
+            embedding_model,
+            embedding_backend,
+        )
 
         return {
             "status": "success",
