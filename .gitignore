@@ -18,11 +18,21 @@ staticfiles/
 # Env
 .env
 .env.*
+!.env.example
 *.secret
 *.key
 
 # Docker volume / runtime data
 data/
+
+# Celery runtime
+celerybeat-schedule
+celerybeat-schedule.*
+app/celerybeat-schedule
+app/celerybeat-schedule.*
+
+# Editor local settings
+.vscode/settings.json
 
 # cache
 .pytest_cache/
