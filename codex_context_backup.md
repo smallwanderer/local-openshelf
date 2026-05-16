@@ -92,7 +92,7 @@ app/requirements.ai.txt
   - Docling, Torch 계열, FlagEmbedding, HWP 파서 등 AI worker 의존성
 
 app/requirements.dev.txt
-  - pytest 등 개발/테스트 의존성
+  - pytest, pytest-django 등 개발/테스트 의존성
 
 app/requirements.txt
   - 로컬 전체 설치용 aggregate 파일
@@ -253,6 +253,25 @@ Static assets:
 app/static/assets/icons/
 app/static/assets/status/
 ```
+
+테스트 실행:
+
+```text
+docker compose -f docker-compose.dev.yml exec app python -m pytest
+```
+
+`No module named pytest`가 나오면 운영용 compose 또는 로컬 Python으로 테스트가 실행된 것입니다. dev 이미지가 오래된 경우 `docker compose -f docker-compose.dev.yml build app` 후 다시 실행합니다.
+
+GitHub Actions unit test:
+
+```text
+.github/workflows/pytest-unit.yml
+  - cp .env.example .env.dev
+  - docker compose -f docker-compose.dev.yml build celery-core-worker
+  - docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m pytest -m "unit"
+```
+
+unit test collection에서 `document_ai.parsers.docling_parser`가 import되므로 CI test image에는 dev 의존성과 AI 의존성이 모두 필요합니다.
 
 문서:
 

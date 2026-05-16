@@ -186,7 +186,23 @@ docker compose -f docker-compose.dev.yml exec app python manage.py createsuperus
 테스트:
 
 ```bash
-docker compose -f docker-compose.dev.yml exec app pytest
+docker compose -f docker-compose.dev.yml exec app python -m pytest
+```
+
+`No module named pytest`가 나오면 운영용 `app` 이미지나 로컬 Python에서 테스트가 실행된 것입니다. 테스트는 dev 이미지에서만 실행합니다.
+
+```bash
+docker compose -f docker-compose.dev.yml build app
+docker compose -f docker-compose.dev.yml up -d app
+docker compose -f docker-compose.dev.yml exec app python -m pytest
+```
+
+GitHub Actions의 unit test는 `docling_parser` import 수집 때문에 AI 의존성이 필요합니다. CI에서는 dev compose의 `celery-core-worker` 이미지로 실행합니다.
+
+```bash
+cp .env.example .env.dev
+docker compose -f docker-compose.dev.yml build celery-core-worker
+docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m pytest -m "unit"
 ```
 
 ---
@@ -201,7 +217,7 @@ docker compose logs -f celery-search-worker
 
 # 개발 로그 확인
 docker compose -f docker-compose.dev.yml logs -f app
-docker compose -f docker-compose.dev.yml logs -f celery-worker
+docker compose -f docker-compose.dev.yml logs -f celery-core-worker
 docker compose -f docker-compose.dev.yml logs -f celery-search-worker
 
 # 운영 중지

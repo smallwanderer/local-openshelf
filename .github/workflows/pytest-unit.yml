@@ -15,14 +15,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare env file
-        run: cp .env.example .env
+        run: cp .env.example .env.dev
 
-      - name: Build app image
-        run: docker compose build app
+      - name: Build test image
+        run: docker compose -f docker-compose.dev.yml build celery-core-worker
 
       - name: Run unit tests
-        run: docker compose run --rm app python -m pytest -m "unit"
+        run: docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m pytest -m "unit"
 
       - name: Cleanup
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: docker compose -f docker-compose.dev.yml down -v --remove-orphans
