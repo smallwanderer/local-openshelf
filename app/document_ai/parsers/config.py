@@ -1,13 +1,13 @@
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from functools import lru_cache
 
 from django.conf import settings
 
-from docling.document_converter import DocumentConverter
-from docling.chunking import HybridChunker
-from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
-from docling_core.transforms.serializer.base import BaseSerializerProvider
-from transformers import AutoTokenizer
+if TYPE_CHECKING:
+    from docling.document_converter import DocumentConverter
+    from docling.chunking import HybridChunker
+    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+    from docling_core.transforms.serializer.base import BaseSerializerProvider
 
 
 def get_embedding_model():
@@ -36,24 +36,33 @@ def get_max_tokens() -> int:
 
 @lru_cache(maxsize=1)
 def get_raw_tokenizer():
+    from transformers import AutoTokenizer
+
     return AutoTokenizer.from_pretrained(get_embedding_model())
 
 
 @lru_cache(maxsize=1)
-def get_hf_tokenizer() -> HuggingFaceTokenizer:
+def get_hf_tokenizer() -> "HuggingFaceTokenizer":
+    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+    from transformers import AutoTokenizer
+
     return HuggingFaceTokenizer(
         tokenizer=AutoTokenizer.from_pretrained(get_embedding_model()),
         max_tokens=get_chunk_max_tokens(),
     )
 
 @lru_cache(maxsize=1)
-def get_converter() -> DocumentConverter:
+def get_converter() -> "DocumentConverter":
+    from docling.document_converter import DocumentConverter
+
     return DocumentConverter()
 
 
 def get_hybrid_hf_chunker(
-    serializer_provider: Optional[BaseSerializerProvider] = None,
-) -> HybridChunker:
+    serializer_provider: Optional["BaseSerializerProvider"] = None,
+) -> "HybridChunker":
+    from docling.chunking import HybridChunker
+
     return HybridChunker(
         tokenizer=get_hf_tokenizer(),
         # [max_tokens] Optional, default is derived from tokenizer for HF case

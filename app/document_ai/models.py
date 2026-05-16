@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from pgvector.django import VectorField, HnswIndex
 
 from config.enums import AIStatus, FileLanguage
@@ -251,3 +252,40 @@ class ChunkEmbedding(models.Model):
             "embedded_at": self.embedded_at.isoformat() if self.embedded_at else None,
             "created_at": self.created_at.isoformat(),
         }
+
+
+class SearchJob(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="document_ai_search_jobs",
+    )
+
+    query = models.TextField()
+    top_k = models.PositiveIntegerField(default=5)
+    threshold = models.FloatField(null=True, blank=True)
+    node_ids = models.JSONField(default=list, blank=True)
+
+    status = models.CharField(
+        max_length=32,
+        choices=AIStatus.choices,
+        default=AIStatus.PENDING,
+        db_index=True,
+    )
+    task_id = models.CharField(max_length=255, blank=True)
+    results = models.JSONField(default=list, blank=True)
+    error_message = models.TextField(blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner", "status", "-created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"SearchJob({self.id}) {self.status}: {self.query[:40]}"

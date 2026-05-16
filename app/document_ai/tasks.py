@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import logging
+import json
 import os
+from typing import TYPE_CHECKING
 from datetime import timedelta
 
 from celery import shared_task
@@ -14,10 +18,12 @@ from document_ai.parsers.config import (
     get_embedding_max_tokens,
     get_embedding_model,
 )
-from document_ai.parsers.docling_parser import parse_document_entry, ParseResult
 from document_ai.parsers.text_utils import normalize_extracted_text, serialize_meta
 
 from config.enums import AIStatus
+
+if TYPE_CHECKING:
+    from document_ai.parsers.docling_parser import ParseResult
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +398,7 @@ def parse_document_with_docling(node_id: int) -> dict:
     node_id를 받아 파일 경로를 조회하고, 파싱 후 결과를 DB에 저장
     """
     from files.models import Node
+    from document_ai.parsers.docling_parser import parse_document_entry
 
     try:
         node = Node.objects.select_related("blob").get(pk=node_id)
@@ -712,6 +719,68 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
             "status": "failed",
             "chunk_id": chunk_id,
             "error": str(e),
+        }
+
+
+@shared_task(queue="search", bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=1)
+def perform_vector_search(self, job_id: int) -> dict:
+    from document_ai.models import SearchJob
+    from document_ai.search.retriever import VectorRetriever
+
+    try:
+        job = SearchJob.objects.select_related("owner").get(pk=job_id)
+    except SearchJob.DoesNotExist:
+        logger.error("Search job %s not found", job_id)
+        return {
+            "status": "failed",
+            "job_id": job_id,
+            "error": f"Search job {job_id} not found",
+        }
+
+    job.status = AIStatus.PROCESSING
+    job.started_at = timezone.now()
+    job.error_message = ""
+    job.save(update_fields=["status", "started_at", "error_message"])
+
+    try:
+        retriever = VectorRetriever()
+        results = retriever.retrieve(
+            query=job.query,
+            top_k=job.top_k,
+            threshold=job.threshold,
+            node_ids=job.node_ids or None,
+            user=job.owner,
+        )
+
+        # UUID 등 JSONField가 직접 저장하지 못하는 값을 문자열로 정규화합니다.
+        normalized_results = json.loads(json.dumps(results, default=str))
+
+        job.results = normalized_results
+        job.status = AIStatus.COMPLETED
+        job.completed_at = timezone.now()
+        job.error_message = ""
+        job.save(update_fields=["results", "status", "completed_at", "error_message"])
+
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "result_count": len(normalized_results),
+        }
+
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+
+        job.status = AIStatus.FAILED
+        job.completed_at = timezone.now()
+        job.error_message = str(exc)
+        job.save(update_fields=["status", "completed_at", "error_message"])
+
+        logger.exception("Vector search failed: job_id=%s", job_id)
+        return {
+            "status": "failed",
+            "job_id": job_id,
+            "error": str(exc),
         }
 
 

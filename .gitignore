@@ -48,3 +48,8 @@ __pycache__/
 response.json
 scratch.py
 app/tmp_*.js
+
+# AI Agent Meta-files
+task.md
+implementation_plan.md
+walkthrough.md

@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from document_ai.models import SearchJob
+
 class VectorSearchRequestSerializer(serializers.Serializer):
     query = serializers.CharField(
         required=True, 
@@ -35,3 +37,28 @@ class VectorSearchResponseSerializer(serializers.Serializer):
     file_ext = serializers.CharField()
     doc_score = serializers.FloatField()
     evidences = serializers.ListField(child=EvidenceSerializer())
+
+
+class SearchJobCreateResponseSerializer(serializers.Serializer):
+    job_id = serializers.IntegerField()
+    status = serializers.CharField()
+    poll_url = serializers.CharField()
+
+
+class SearchJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SearchJob
+        fields = [
+            "id",
+            "query",
+            "top_k",
+            "threshold",
+            "node_ids",
+            "status",
+            "results",
+            "error_message",
+            "created_at",
+            "started_at",
+            "completed_at",
+            "updated_at",
+        ]

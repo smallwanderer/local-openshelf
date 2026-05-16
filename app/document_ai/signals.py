@@ -1,11 +1,24 @@
 import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from celery import current_app
 
 from files.models import FileBlob
-from document_ai.tasks import parse_document_with_docling
 
 logger = logging.getLogger(__name__)
+
+
+class _ParseDocumentTaskProxy:
+    """Queue parse task without importing the heavy Celery task module in web workers."""
+
+    task_name = "document_ai.tasks.parse_document_with_docling"
+
+    def delay(self, node_id):
+        return current_app.send_task(self.task_name, args=[node_id], queue="parse")
+
+
+parse_document_with_docling = _ParseDocumentTaskProxy()
+
 
 @receiver(post_save, sender=FileBlob)
 def trigger_document_parsing(sender, instance, created, **kwargs):

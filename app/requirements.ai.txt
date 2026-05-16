@@ -1,0 +1,8 @@
+docling==2.*
+torchvision==0.*
+
+sentence-transformers==5.*
+FlagEmbedding==1.*
+
+python-hwpx==2.*
+pyhwp==0.1b15
