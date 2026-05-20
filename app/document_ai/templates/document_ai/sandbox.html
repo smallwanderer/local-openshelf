@@ -1,0 +1,646 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}AI Search Sandbox - Openshelf{% endblock %}
+
+{% block extra_head %}
+<style>
+  :root {
+    --panel-width: 380px;
+    --primary: var(--accent);
+    --primary-dark: #1d4ed8;
+    --primary-light: #eff6ff;
+    --slate-400: #94a3b8;
+    --slate-500: #64748b;
+    --slate-700: #334155;
+    --slate-900: #0f172a;
+    --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .main-content {
+    max-width: none;
+    padding: 0;
+  }
+
+  .footer {
+    display: none;
+  }
+
+  .sandbox-container {
+    display: flex;
+    min-height: calc(100vh - 56px);
+    overflow: hidden;
+    background: #f8fafc;
+  }
+
+  /* --- Sidebar Controls --- */
+  .sandbox-sidebar {
+    width: var(--panel-width);
+    background: white;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    padding: 24px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    margin-bottom: 24px;
+  }
+
+  .sidebar-header h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--slate-900);
+    margin-bottom: 4px;
+  }
+
+  .sidebar-header p {
+    font-size: 0.875rem;
+    color: var(--slate-500);
+  }
+
+  .control-group {
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+
+  .control-group:last-child {
+    border-bottom: none;
+  }
+
+  .control-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .control-label span:first-child {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--slate-700);
+  }
+
+  .control-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.813rem;
+    color: var(--primary);
+    background: var(--primary-light);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+
+  .input-number {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    margin-top: 4px;
+  }
+
+  .weight-ratio {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  /* --- Main Content --- */
+  .sandbox-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .search-bar-container {
+    padding: 24px 40px;
+    background: white;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .search-input-wrapper {
+    position: relative;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  #sandboxSearchInput {
+    width: 100%;
+    padding: 16px 20px;
+    padding-right: 120px;
+    font-size: 1.125rem;
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    transition: var(--transition);
+  }
+
+  #sandboxSearchInput:focus {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 4px 20px var(--primary-light);
+  }
+
+  .btn-search {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    bottom: 8px;
+    padding: 0 24px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+
+  .btn-search:hover {
+    background: var(--primary-dark);
+  }
+
+  /* --- Results Area --- */
+  .results-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .result-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: var(--transition);
+  }
+
+  .result-card:hover {
+    box-shadow: 0 8px 24px rgba(0,0,0,0.05);
+    border-color: var(--primary-light);
+  }
+
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .doc-info h3 {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--slate-900);
+  }
+
+  .doc-score-badge {
+    background: var(--slate-900);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 0.875rem;
+  }
+
+  .evidence-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .evidence-item {
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 16px;
+    border-left: 4px solid var(--primary);
+  }
+
+  .evidence-meta {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--slate-500);
+    text-transform: uppercase;
+  }
+
+  .score-breakdown {
+    display: flex;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border);
+  }
+
+  .breakdown-item {
+    font-size: 0.75rem;
+  }
+
+  .breakdown-item strong {
+    color: var(--slate-700);
+  }
+
+  .loading-state {
+    display: none;
+    text-align: center;
+    padding: 40px;
+  }
+
+  .sandbox-message {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    color: var(--slate-700);
+  }
+
+  .sandbox-message.error {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+  }
+
+  .job-status {
+    display: none;
+    margin: 18px 40px 0;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--slate-500);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="sandbox-container">
+  <!-- Sidebar -->
+  <aside class="sandbox-sidebar">
+    <div class="sidebar-header">
+      <h2>AI Tuning Sandbox</h2>
+      <p>실시간 검색 파라미터 최적화</p>
+    </div>
+
+    <!-- Search Settings -->
+    <div class="control-group">
+      <div class="control-label">
+        <span>Top-K (Return)</span>
+        <span id="topKVal" class="control-value">5</span>
+      </div>
+      <input type="range" id="topK" min="0" max="100" step="1" value="5">
+      <div style="font-size: 0.625rem; color: #94a3b8; margin-top: 4px;">
+        * 0으로 설정 시 연산된 모든 결과 표시
+      </div>
+    </div>
+
+    <!-- Weight Tuning -->
+    <div class="control-group">
+      <div class="control-label">
+        <span>Hybrid Weights</span>
+        <div class="weight-ratio">
+          <span id="denseVal" class="control-value">0.30</span>
+          <span id="sparseVal" class="control-value">0.70</span>
+        </div>
+      </div>
+      <input type="range" id="denseWeight" min="0" max="1" step="0.05" value="0.30">
+      <div style="display:flex; justify-content: space-between; font-size: 0.625rem; color: #94a3b8; margin-top: 4px;">
+        <span>DENSE (Semantic)</span>
+        <span>SPARSE (Keyword)</span>
+      </div>
+    </div>
+
+    <!-- Candidate Settings -->
+    <div class="control-group">
+      <div class="control-label">
+        <span>Candidate Multiplier</span>
+        <span id="multiplierVal" class="control-value">12</span>
+      </div>
+      <input type="range" id="candidateMultiplier" min="1" max="50" step="1" value="12">
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">
+        <span>Per Node Cap</span>
+        <span id="nodeCapVal" class="control-value">4</span>
+      </div>
+      <input type="range" id="nodeCap" min="0" max="20" step="1" value="4">
+      <div style="font-size: 0.625rem; color: #94a3b8; margin-top: 4px;">
+        * 0으로 설정 시 연산된 모든 결과 표시
+      </div>
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">
+        <span>Query Sparse Top-N</span>
+        <span id="sparseTopNVal" class="control-value">32</span>
+      </div>
+      <input type="range" id="sparseTopN" min="8" max="128" step="4" value="32">
+    </div>
+
+    <!-- Re-ranking Settings -->
+    <div class="control-group">
+      <div class="control-label">
+        <span>Doc Pool Top-K</span>
+        <span id="poolTopKVal" class="control-value">5</span>
+      </div>
+      <input type="range" id="poolTopK" min="1" max="20" step="1" value="5">
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">
+        <span>Softmax Tau (Temp)</span>
+        <span id="tauVal" class="control-value">2.0</span>
+      </div>
+      <input type="range" id="poolTau" min="0.1" max="10" step="0.1" value="2.0">
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">
+        <span>Length Penalty Alpha</span>
+        <span id="alphaVal" class="control-value">0.10</span>
+      </div>
+      <input type="range" id="lengthAlpha" min="0.0" max="1.0" step="0.05" value="0.10">
+    </div>
+
+    <!-- Context Settings -->
+    <div class="control-group">
+      <div class="control-label">
+        <span>Evidence Top-K</span>
+        <span id="evidenceKVal" class="control-value">3</span>
+      </div>
+      <input type="range" id="evidenceK" min="1" max="10" step="1" value="3">
+    </div>
+
+    <div class="control-group">
+      <div class="control-label">
+        <span>Context Window</span>
+        <span id="windowVal" class="control-value">1</span>
+      </div>
+      <input type="range" id="contextWindow" min="0" max="5" step="1" value="1">
+    </div>
+  </aside>
+
+  <!-- Main Area -->
+  <main class="sandbox-main">
+    <div class="search-bar-container">
+      <div class="search-input-wrapper">
+        <input type="text" id="sandboxSearchInput" placeholder="실험할 검색어를 입력하세요..." autocomplete="off">
+        <button class="btn-search" id="btnRunSearch">Run Search</button>
+      </div>
+    </div>
+
+    <div id="loadingArea" class="loading-state">
+      <div class="spinner"></div>
+      <p id="loadingMsg">워커에서 임베딩 연산 중...</p>
+    </div>
+
+    <div id="jobStatusArea" class="job-status"></div>
+
+    <div id="resultsArea" class="results-container">
+      <div style="text-align:center; color: var(--slate-400); margin-top: 60px;">
+        <svg style="width:64px; height:64px; opacity: 0.2; margin-bottom: 16px;" viewBox="0 0 24 24">
+          <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+        </svg>
+        <p>파라미터를 조정하고 검색을 실행해 보세요.</p>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  const denseInput = document.getElementById('denseWeight');
+  const denseVal = document.getElementById('denseVal');
+  const sparseVal = document.getElementById('sparseVal');
+
+  // 슬라이더 값 실시간 연동
+  const sliders = [
+    {id: 'topK', valId: 'topKVal'},
+    {id: 'denseWeight', valId: 'denseVal'},
+    {id: 'candidateMultiplier', valId: 'multiplierVal'},
+    {id: 'nodeCap', valId: 'nodeCapVal'},
+    {id: 'sparseTopN', valId: 'sparseTopNVal'},
+    {id: 'poolTopK', valId: 'poolTopKVal'},
+    {id: 'poolTau', valId: 'tauVal'},
+    {id: 'lengthAlpha', valId: 'alphaVal'},
+    {id: 'evidenceK', valId: 'evidenceKVal'},
+    {id: 'contextWindow', valId: 'windowVal'},
+  ];
+
+  sliders.forEach(s => {
+    const el = document.getElementById(s.id);
+    const vEl = document.getElementById(s.valId);
+    el.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (s.id === 'topK') {
+        vEl.textContent = val === 0 ? 'ALL' : val;
+      } else {
+        vEl.textContent = val.toFixed(s.id.includes('Weight') || s.id.includes('Tau') || s.id.includes('Alpha') ? 2 : 0);
+      }
+      
+      if (s.id === 'denseWeight') {
+        sparseVal.textContent = (1.0 - val).toFixed(2);
+      }
+    });
+  });
+
+  const btnSearch = document.getElementById('btnRunSearch');
+  const searchInput = document.getElementById('sandboxSearchInput');
+  const loadingArea = document.getElementById('loadingArea');
+  const resultsArea = document.getElementById('resultsArea');
+  const loadingMsg = document.getElementById('loadingMsg');
+  const jobStatusArea = document.getElementById('jobStatusArea');
+  let activeJobStartedAt = null;
+
+  function showMessage(message, type = 'info') {
+    resultsArea.innerHTML = `<div class="sandbox-message ${type}">${escapeHtml(message)}</div>`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function formatScore(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(4) : '0.0000';
+  }
+
+  async function runSearch() {
+    const query = searchInput.value.trim();
+    if (!query) return;
+
+    resultsArea.innerHTML = '';
+    loadingArea.style.display = 'block';
+    jobStatusArea.style.display = 'none';
+    activeJobStartedAt = Date.now();
+    loadingMsg.textContent = '검색 작업을 큐에 넣는 중...';
+
+    const payload = {
+      query: query,
+      top_k: parseInt(document.getElementById('topK').value),
+      dense_weight: parseFloat(denseInput.value),
+      sparse_weight: 1.0 - parseFloat(denseInput.value),
+      candidate_multiplier: parseInt(document.getElementById('candidateMultiplier').value),
+      per_node_candidate_cap: parseInt(document.getElementById('nodeCap').value),
+      query_sparse_top_n: parseInt(document.getElementById('sparseTopN').value),
+      evidence_top_k: parseInt(document.getElementById('evidenceK').value),
+      pool_top_k: parseInt(document.getElementById('poolTopK').value),
+      pool_tau: parseFloat(document.getElementById('poolTau').value),
+      doc_length_penalty_alpha: parseFloat(document.getElementById('lengthAlpha').value),
+      evidence_context_window: parseInt(document.getElementById('contextWindow').value),
+    };
+
+    try {
+      const response = await fetch('/api/document-ai/v1/tuning/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': '{{ csrf_token }}'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.detail || `검색 요청 실패 (${response.status})`);
+      }
+      if (data.job_id) {
+        updateJobStatus({
+          id: data.job_id,
+          status: data.status,
+          poll_url: data.poll_url,
+        });
+        pollResult(data.poll_url, 0);
+      } else {
+        showMessage('검색 작업 ID를 받지 못했습니다.', 'error');
+        loadingArea.style.display = 'none';
+      }
+    } catch (err) {
+      console.error(err);
+      showMessage(err.message || '검색 요청 중 오류가 발생했습니다.', 'error');
+      loadingArea.style.display = 'none';
+    }
+  }
+
+  async function pollResult(url, attempt = 0) {
+    if (attempt > 900) {
+      loadingArea.style.display = 'none';
+      showMessage('검색 작업이 15분 안에 완료되지 않았습니다. celery-search-worker 로그와 최신 SearchJob 상태를 확인하세요.', 'error');
+      return;
+    }
+
+    try {
+      const response = await fetch(url, {headers: {'Accept': 'application/json'}});
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || data.detail || `검색 상태 조회 실패 (${response.status})`);
+      }
+      updateJobStatus(data);
+
+      if (data.status === 'completed') {
+        renderResults(data.results);
+        loadingArea.style.display = 'none';
+      } else if (data.status === 'failed') {
+        showMessage('검색 태스크 실패: ' + (data.error_message || '오류 메시지가 없습니다.'), 'error');
+        loadingArea.style.display = 'none';
+      } else {
+        loadingMsg.textContent = data.status === 'processing'
+          ? '검색 worker에서 임베딩과 검색을 실행 중...'
+          : '검색 worker 대기 중...';
+        setTimeout(() => pollResult(url, attempt + 1), 1000);
+      }
+    } catch (err) {
+      console.error(err);
+      showMessage(err.message || '검색 상태 조회 중 오류가 발생했습니다.', 'error');
+      loadingArea.style.display = 'none';
+    }
+  }
+
+  function updateJobStatus(job) {
+    const elapsedSeconds = activeJobStartedAt
+      ? Math.floor((Date.now() - activeJobStartedAt) / 1000)
+      : 0;
+    const taskId = job.task_id || '-';
+    const jobId = job.id || job.job_id || '-';
+    jobStatusArea.style.display = 'block';
+    jobStatusArea.textContent = `job=${jobId} status=${job.status || '-'} task=${taskId} elapsed=${elapsedSeconds}s`;
+  }
+
+  function renderResults(results) {
+    if (!results || results.length === 0) {
+      resultsArea.innerHTML = '<p style="text-align:center; padding:40px;">검색 결과가 없습니다.</p>';
+      return;
+    }
+
+    resultsArea.innerHTML = results.map(res => `
+      <div class="result-card">
+        <div class="result-header">
+          <div class="doc-info">
+            <h3>${escapeHtml(res.node_name || 'Untitled')}</h3>
+            <span style="font-size:0.75rem; color:#64748b;">${escapeHtml(res.node_id || '')}</span>
+          </div>
+          <div class="doc-score-badge">SCORE: ${formatScore(res.doc_score)}</div>
+        </div>
+        
+        <div class="evidence-list">
+          ${(res.evidences || []).map(ev => `
+            <div class="evidence-item">
+              <div class="evidence-meta">
+                <span>SECTION: ${escapeHtml(ev.section || 'N/A')}</span>
+                <span>PAGES: ${escapeHtml(ev.pages || '')}</span>
+              </div>
+              <div style="font-size: 0.938rem; line-height: 1.6; color: #334155;">
+                ${escapeHtml(ev.text || '')}
+              </div>
+              <div class="score-breakdown">
+                <div class="breakdown-item"><strong>Hybrid:</strong> ${formatScore(ev.hybrid_score)}</div>
+                <div class="breakdown-item"><strong>Dense:</strong> ${formatScore(ev.dense_score)}</div>
+                <div class="breakdown-item"><strong>Sparse:</strong> ${formatScore(ev.sparse_score)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  btnSearch.addEventListener('click', runSearch);
+  searchInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') runSearch(); });
+
+</script>
+{% endblock %}

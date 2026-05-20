@@ -265,6 +265,7 @@ class SearchJob(models.Model):
     top_k = models.PositiveIntegerField(default=5)
     threshold = models.FloatField(null=True, blank=True)
     node_ids = models.JSONField(default=list, blank=True)
+    tuning_params = models.JSONField(default=dict, blank=True)
 
     status = models.CharField(
         max_length=32,

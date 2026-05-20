@@ -49,6 +49,7 @@ def _get_bgem3_model(model_name: str):
         model = BGEM3FlagModel(
             model_name,
             use_fp16=(_DEVICE is not None and _DEVICE.type == "cuda"),
+            normalize_embeddings=True,
         )
         _MODEL_CACHE[model_name] = model
     return model
@@ -79,6 +80,20 @@ def _normalize_sparse_vector(weights: dict[str, float]) -> dict[str, float]:
         if value > 0
     }
 
+    
+def _check_normalized(vector: list[float]) -> list[float]:
+    if not vector:
+        return []
+
+    norm = math.sqrt(sum(v * v for v in vector))
+    if norm <= 0:
+        return vector
+
+    if not math.isclose(norm, 1.0, rel_tol=1e-5):
+        return [v / norm for v in vector]
+
+    return vector
+
 
 def _coerce_sparse_vector(raw_sparse: dict) -> dict[str, float]:
     sparse_vector = {
@@ -99,7 +114,7 @@ def _coerce_dense_vector(raw_dense) -> list[float]:
     vector = [float(value) for value in raw_dense]
     if not vector:
         raise RuntimeError("Embedding vector is empty")
-    return vector
+    return _check_normalized(vector)
 
 
 def _embed_with_bgem3_hybrid(

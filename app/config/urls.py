@@ -23,6 +23,7 @@ from django.views.generic import RedirectView
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from document_ai.search.views import SandboxPageView
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -39,6 +40,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("accounts/", include("accounts.urls")),
     path("files/", include("files.urls")),
+    path("document-ai/sandbox/", SandboxPageView.as_view(), name="document-ai-sandbox"),
     path("api/document-ai/", include("document_ai.urls")),
 
     # Swagger Documentation URLs

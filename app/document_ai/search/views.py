@@ -1,5 +1,7 @@
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.views.generic import TemplateView
 
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import permissions, status
@@ -12,6 +14,7 @@ from document_ai.search.serializers import (
     SearchJobSerializer,
     VectorSearchRequestSerializer,
     VectorSearchResponseSerializer,
+    VectorTuningRequestSerializer,
 )
 from document_ai.tasks import perform_vector_search
 
@@ -76,4 +79,51 @@ class VectorSearchJobView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+
         return Response(SearchJobSerializer(job).data, status=status.HTTP_200_OK)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class VectorSandboxView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Vector search sandbox (Tuning)",
+        operation_description="Run vector search with custom tuning parameters.",
+        request_body=VectorTuningRequestSerializer,
+        responses={202: SearchJobCreateResponseSerializer()},
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = VectorTuningRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        tuning_keys = [
+            "dense_weight", "sparse_weight", "candidate_multiplier",
+            "per_node_candidate_cap", "query_sparse_top_n", "evidence_top_k",
+            "pool_top_k", "pool_tau", "doc_length_penalty_alpha",
+            "evidence_context_window"
+        ]
+        tuning_params = {k: v for k, v in serializer.validated_data.items() if k in tuning_keys}
+
+        job = SearchJob.objects.create(
+            owner=request.user,
+            query=serializer.validated_data["query"],
+            top_k=serializer.validated_data.get("top_k", 5),
+            tuning_params=tuning_params,
+        )
+        async_result = perform_vector_search.apply_async(args=[job.id], queue="search")
+        job.task_id = async_result.id
+        job.save(update_fields=["task_id"])
+
+        return Response(
+            {
+                "job_id": job.id,
+                "status": job.status,
+                "poll_url": request.build_absolute_uri(f"/api/document-ai/v1/search/jobs/{job.id}/"),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class SandboxPageView(LoginRequiredMixin, TemplateView):
+    template_name = "document_ai/sandbox.html"

@@ -97,7 +97,7 @@ class FakeQuerySet:
         for row in self.rows:
             dot = sum(a * b for a, b in zip(dense_query, row.vector))
             annotated_row = SimpleNamespace(**row.__dict__)
-            annotated_row.distance = 1.0 - dot
+            annotated_row.distance = -dot
             annotated.append(annotated_row)
         return FakeQuerySet(annotated)
 
@@ -110,6 +110,9 @@ class FakeQuerySet:
         if isinstance(item, slice):
             return self.rows[item]
         return self.rows[item]
+
+    def __iter__(self):
+        return iter(self.rows)
 
 
 class FakeManager:
@@ -159,6 +162,15 @@ class FakeDocumentChunkManager:
 def test_sparse_dot_product():
     score = _sparse_dot_product({"10": 0.6, "20": 0.8}, {"20": 0.5, "30": 1.0})
     assert score == 0.4
+
+
+def test_retriever_defaults_to_inner_product():
+    retriever = VectorRetriever()
+
+    assert retriever.distance_strategy == "inner_product"
+    assert retriever._distance_to_dense_score(-0.91) == 0.91
+    assert retriever._distance_to_dense_score(0.91) == 0.91
+    assert retriever._threshold_to_distance_filter(0.8) == -0.8
 
 
 def test_retriever_hybrid_reranks_by_sparse_score(monkeypatch):
@@ -248,6 +260,71 @@ def test_retriever_hybrid_reranks_by_sparse_score(monkeypatch):
     assert results[0]["node_name"] == "hybrid-winner"
     assert results[1]["node_name"] == "dense-wins-but-sparse-loses"
     assert all(item["node_name"] != "other-user-doc" for item in results)
+    assert results[0]["score_details"]["distance_strategy"] == "inner_product"
+    assert results[0]["score_details"]["pooling_method"] == "normalized_logsumexp"
+    assert results[0]["evidences"][0]["dense_score"] > 0
+    assert results[0]["evidences"][0]["hybrid_score"] > 0
+
+
+def test_retriever_top_k_zero_returns_all_candidates(monkeypatch):
+    owner = SimpleNamespace(email="owner@example.com")
+    rows = [
+        _make_embedding_row(
+            parse_result_id=1,
+            uid=str(uuid4()),
+            owner=owner,
+            chunk_id=1,
+            chunk_index=0,
+            node_name="doc-a",
+            dense_vector=[0.95, 0.05],
+            sparse_vector={"999": 1.0},
+        ),
+        _make_embedding_row(
+            parse_result_id=2,
+            uid=str(uuid4()),
+            owner=owner,
+            chunk_id=2,
+            chunk_index=0,
+            node_name="doc-b",
+            dense_vector=[0.90, 0.10],
+            sparse_vector={"999": 0.8},
+        ),
+        _make_embedding_row(
+            parse_result_id=3,
+            uid=str(uuid4()),
+            owner=owner,
+            chunk_id=3,
+            chunk_index=0,
+            node_name="doc-c",
+            dense_vector=[0.85, 0.15],
+            sparse_vector={"999": 0.6},
+        ),
+    ]
+
+    monkeypatch.setattr(retriever_module.ChunkEmbedding, "objects", FakeManager(rows))
+    monkeypatch.setattr(
+        retriever_module.DocumentChunk,
+        "objects",
+        FakeDocumentChunkManager([row.chunk for row in rows]),
+    )
+    monkeypatch.setattr(VectorRetriever, "_get_distance_func", lambda self, vector: vector)
+
+    fake_embedding_module = types.SimpleNamespace(
+        bge_m3_embedder=lambda *args, **kwargs: SimpleNamespace(
+            dense_vector=[1.0, 0.0],
+            sparse_vector={"999": 1.0},
+        )
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "document_ai.embedding.embeding_models",
+        fake_embedding_module,
+    )
+
+    retriever = VectorRetriever()
+    results = retriever.retrieve(query="all candidates", top_k=0, user=owner)
+
+    assert [result["node_name"] for result in results] == ["doc-a", "doc-b", "doc-c"]
 
 
 def test_retriever_excludes_trashed_nodes(monkeypatch):

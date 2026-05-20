@@ -744,12 +744,20 @@ def perform_vector_search(self, job_id: int) -> dict:
 
     try:
         retriever = VectorRetriever()
+        logger.info(
+            "Vector search started: job_id=%s, owner_id=%s, top_k=%s, tuning_params=%s",
+            job.id,
+            job.owner_id,
+            job.top_k,
+            job.tuning_params,
+        )
         results = retriever.retrieve(
             query=job.query,
             top_k=job.top_k,
             threshold=job.threshold,
             node_ids=job.node_ids or None,
             user=job.owner,
+            tuning_params=job.tuning_params,
         )
 
         # UUID 등 JSONField가 직접 저장하지 못하는 값을 문자열로 정규화합니다.
@@ -760,6 +768,12 @@ def perform_vector_search(self, job_id: int) -> dict:
         job.completed_at = timezone.now()
         job.error_message = ""
         job.save(update_fields=["results", "status", "completed_at", "error_message"])
+
+        logger.info(
+            "Vector search completed: job_id=%s, result_count=%s",
+            job.id,
+            len(normalized_results),
+        )
 
         return {
             "status": "success",
