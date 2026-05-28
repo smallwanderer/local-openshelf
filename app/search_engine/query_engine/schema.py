@@ -8,7 +8,7 @@ QUERY_DSL_SCHEMA = {
             "uid": {"type": "uuid", "operators": {"eq", "in"}},
             "name": {"type": "str", "operators": {"eq", "neq", "contains", "in"}},
             "ext": {"type": "str", "operators": {"eq", "neq", "in"}},
-            "node_type": {"type": "str", "operators": {"eq", "neq", "in"}},
+            "node_type": {"type": "str", "operators": {"eq", "neq", "in"}, "choices": {"file", "directory"}},
             "description": {"type": "str", "operators": {"contains"}},
             "path": {"type": "str", "operators": {"eq", "contains"}},
             "starred": {"type": "bool", "operators": {"eq", "neq"}},

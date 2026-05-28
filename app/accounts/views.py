@@ -3,6 +3,7 @@ from django.contrib.auth.views import LoginView, LogoutView
 from django.shortcuts import redirect, render
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.conf import settings
 
 from .forms import EmailAuthenticationForm, ResendVerificationEmailForm, UserRegistrationForm
 from .models import User
@@ -17,15 +18,23 @@ def signup_view(request):
         if form.is_valid():
             user = form.save(commit=False)
             user.set_password(form.cleaned_data["password"])
-            user.is_active = False
-            user.email_verified = False
-            user.save()
+            
+            if getattr(settings, "REQUIRE_EMAIL_VERIFICATION", True):
+                user.is_active = False
+                user.email_verified = False
+                user.save()
 
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            token = account_activation_token.make_token(user)
-            send_account_activation_email(request, user, uid, token)
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                token = account_activation_token.make_token(user)
+                send_account_activation_email(request, user, uid, token)
 
-            return render(request, "accounts/signup_done.html")
+                return render(request, "accounts/signup_done.html")
+            else:
+                user.is_active = True
+                user.email_verified = True
+                user.save()
+                messages.success(request, "Account created successfully. You can now log in.")
+                return redirect("accounts:login")
 
     else:
         form = UserRegistrationForm()

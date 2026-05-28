@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.conf import settings
 from django.test import TestCase, override_settings
 
 from config.enums import AIStatus
@@ -77,7 +78,7 @@ class RAGFlowTests(TestCase):
         self.assertEqual(search_job.owner, self.user)
         self.assertEqual(search_job.query, "농축산물 수급 안정 대책을 요약해줘")
         self.assertEqual(search_job.top_k, 5)
-        self.assertEqual(search_job.threshold, 0.35)
+        self.assertEqual(search_job.threshold, settings.RAG_RETRIEVAL_THRESHOLD)
         self.assertEqual(search_job.task_id, "search-task-id")
         self.assertEqual(rag_job.search_job, search_job)
         self.assertEqual(rag_job.status, AIStatus.PENDING)

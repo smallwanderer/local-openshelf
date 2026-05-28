@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from search_engine.query_engine.contracts import DSLFilter, DSLSort, QueryDSL
+from search_engine.query_engine.schema import QUERY_DSL_SCHEMA
 
 
 class QueryDSLAdapter:
@@ -28,6 +29,9 @@ class QueryDSLAdapter:
                 )
                 for spec in plan.sort_specs
             ],
-            target_scopes=list(plan.target_scopes),
+            target_scopes=[
+                scope
+                for scope in dict.fromkeys(plan.target_scopes)
+                if scope in QUERY_DSL_SCHEMA
+            ],
         )
-
