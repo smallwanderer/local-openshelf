@@ -145,6 +145,7 @@ AI 검색 품질은 `.env`의 `Document AI — Retriever (Hybrid Search)` 섹션
 | `EMBEDDING_BACKEND` | `bgem3_hybrid` | `ChunkEmbedding.model_version`에 저장되는 backend 식별자 |
 | `CHUNK_MAX_TOKENS` | `1024` | 청크 생성 시 최대 토큰 수 |
 | `EMBEDDING_MAX_TOKENS` | 미설정 | 임베딩 입력 최대 토큰. 미설정 시 `CHUNK_MAX_TOKENS + EMBEDDING_TOKEN_HEADROOM` |
+| `QUERY_EMBEDDING_MAX_TOKENS` | 미설정 | 검색 query 임베딩 최대 토큰. 미설정 시 문서 임베딩 최대 토큰 정책 사용 |
 | `EMBEDDING_DISTANCE_STRATEGY` | `inner_product` | dense 1차 후보 검색 방식. `inner_product`, `cosine`, `l2` |
 | `EMBEDDING_DOC_POOLING_METHOD` | `normalized_logsumexp` | 문서 점수 pooling 방식. `normalized_logsumexp` 권장, `max` 선택 가능 |
 | `EMBEDDING_HYBRID_DENSE_WEIGHT` | `0.3` | hybrid score의 dense 가중치 |
@@ -157,6 +158,27 @@ AI 검색 품질은 `.env`의 `Document AI — Retriever (Hybrid Search)` 섹션
 | `EMBEDDING_DOC_LENGTH_PENALTY_ALPHA` | `0.10` | 문서 후보 hit 수에 대한 약한 길이 패널티 |
 | `EMBEDDING_EVIDENCE_TOP_K` | `3` | 결과에 표시할 evidence chunk 수 |
 | `EMBEDDING_EVIDENCE_CONTEXT_WINDOW` | `1` | evidence 주변에 포함할 인접 chunk 수 |
+| `CONTEXTUAL_COMPRESSION_ENABLED` | `1` | 검색/RAG evidence에서 질문 관련 segment만 추출할지 여부 |
+| `CONTEXTUAL_COMPRESSION_WINDOW_SIZE` | `2` | segment 하나를 구성할 문장 window 크기 |
+| `CONTEXTUAL_COMPRESSION_TOP_SEGMENTS` | `3` | evidence별 compressed text에 포함할 상위 segment 수 |
+| `CONTEXTUAL_COMPRESSION_MAX_SEGMENTS_PER_CHUNK` | `16` | chunk별 lazy 생성 segment 최대 수 |
+| `CONTEXTUAL_COMPRESSION_MAX_CHARS` | `700` | evidence별 compressed text 최대 문자 수 |
+| `CONTEXTUAL_COMPRESSION_MIN_SCORE` | `0.1` | segment가 compressed text에 포함되기 위한 최소 hybrid 점수 |
+| `RAG_SEARCH_TOP_K` | `3` | RAG 검색에서 기본으로 가져올 상위 문서 수 |
+| `RAG_RETRIEVAL_THRESHOLD` | `0.35` | RAG 검색에 적용할 dense similarity 최소값. 빈 값이면 threshold 미적용 |
+| `RAG_EVIDENCE_LIMIT` | `3` | RAG prompt에 포함할 citation/evidence 최대 수 |
+| `RAG_CONTEXT_MAX_CHARS` | `2000` | RAG prompt evidence context 최대 문자 수 |
+| `RAG_EVIDENCE_TEXT_MAX_CHARS` | `350` | RAG citation 하나당 최대 evidence 문자 수 |
+| `QUERY_FRONTEND_MODE` | `passthrough` | 검색/RAG 앞단 질의 처리 모드. 기본값은 원 질의 그대로 사용 |
+| `QUERY_PIPELINE_ENABLED` | `1` | 실험용 QueryDSL 후보를 query_engine에서 검증하고 ORM kwargs로 컴파일할지 여부 |
+| `QUERY_PIPELINE_MAX_VALIDATION_PASSES` | `2` | 실험용 QueryDSL 후보를 정리한 뒤 재검증하는 최대 pass 수 |
+| `QUERY_LLM_ENABLED` | `1` | 실험용 query parser가 사용자 질의를 llm-parser로 QueryDSL 후보로 변환할지 여부 |
+| `QUERY_LLM_URL` | `http://llm-parser:8080` | 실험용 query parser가 사용할 OpenAI 호환 LLM endpoint |
+| `QUERY_LLM_MODEL` | `google/gemma-4-E4B-it` | 실험용 QueryDSL 후보 생성에 사용할 모델 |
+| `QUERY_MAX_TOKENS` | `1024` | 실험용 QueryDSL 후보 응답 최대 토큰 수 |
+| `QUERY_REQUEST_TIMEOUT` | `300` | 실험용 query parser LLM 요청 타임아웃 |
+
+QueryDSL parser는 현재 기본 검색/RAG 경로에 적용하지 않는 실험 기능입니다. `query_frontend`는 기본적으로 원 질의를 semantic query로 그대로 전달하며, QueryDSL 후보 검증/ORM 컴파일 경로는 향후 opt-in 평가를 위해 유지합니다.
 
 ### 4. 운영 형태로 실행
 
@@ -281,10 +303,13 @@ nginx/
 - `app` 컨테이너는 웹 요청 안정성을 위해 AI 의존성을 설치하지 않습니다.
 - 파일 업로드 후 파싱/임베딩은 Celery worker가 비동기로 처리합니다.
 - AI 검색 query embedding도 `celery-search-worker`가 비동기로 처리합니다.
+- 사용자 질문 파싱/재작성은 실험 기능입니다. 현재 검색/RAG 기본 경로는 `query_frontend` 모듈에서 원 질의를 semantic query로 그대로 전달하며, QueryDSL parser는 향후 opt-in으로 연결할 수 있도록 분리해 둡니다.
+- RAG 답변 생성은 `celery-llm-rag-worker`의 `rag` 큐에서 처리하며 `llm-parser`를 호출합니다.
 - `celery-worker`가 중단되어도 파일 저장/다운로드는 계속 동작해야 합니다.
 - AI 파이프라인 상태는 DB에 저장되며, stale 상태는 Celery beat 복구 작업이 재큐잉합니다.
 - 파일 목록의 그리드/리스트 선택은 브라우저 `localStorage`에 저장됩니다.
 - 파일 목록의 AI 상태 배지는 `app/static/assets/status/`의 SVG를 사용합니다.
+- RAG 검색 evidence 생성은 `celery-search-worker`, 답변 생성은 `celery-llm-rag-worker`에서 처리됩니다.
 - `data/uploads/`, `data/pgdata/`, `data/logs/`, `data/staticfiles/`는 런타임 데이터입니다.
 
 ---
@@ -293,7 +318,8 @@ nginx/
 
 - 검색 top-k 평가와 golden set 확장
 - 검색 job UX 개선과 timeout/retry 정책 정리
-- RAG 기능 추가: 검색 evidence 기반 문서 Q&A, 답변 근거 표시, 다중 문서 질의응답
+- RAG 기능 고도화: 답변 품질 평가, citation 클릭 이동, context budget 정책 정리
+- QueryDSL parser 실험: 검색/RAG 앞단에 opt-in으로 연결, 검증 결과 디버그 패널 제공, 품질 확인 후 기본 경로 승격 여부 결정
 - TEXT2SQL 기능 확장: 자연어 파일/문서 메타데이터 질의, SQL 생성 검증, 실행 전 안전성 검사
 - 파싱/임베딩 worker의 queue/load 기반 throttling 추가
 - 업로드부터 검색까지의 E2E 테스트 확장

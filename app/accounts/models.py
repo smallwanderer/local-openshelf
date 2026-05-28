@@ -1,4 +1,7 @@
+import secrets
+
 from django.db import models
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.auth.base_user import BaseUserManager
 
@@ -53,3 +56,52 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+
+def _generate_token_key():
+    return secrets.token_hex(32)
+
+
+class APIToken(models.Model):
+    """Bearer token for CLI / programmatic access."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
+    )
+    key = models.CharField(
+        max_length=64, unique=True, db_index=True, default=_generate_token_key
+    )
+    name = models.CharField(max_length=128, help_text="Token purpose description")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["key"])]
+
+    def __str__(self):
+        return f"{self.name} ({self.user.email})"
+
+
+class SyncQuota(models.Model):
+    """Separate storage quota for sync uploads."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sync_quota",
+    )
+    total_size = models.BigIntegerField(default=10 * 1024 * 1024 * 1024)  # 10 GB
+    used_size = models.BigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def remaining_size(self):
+        return max(self.total_size - self.used_size, 0)
+
+    def __str__(self):
+        used_mb = round(self.used_size / 1024 / 1024, 2)
+        total_gb = round(self.total_size / 1024 / 1024 / 1024, 2)
+        return f"SyncQuota({self.user.email}) {used_mb}MB / {total_gb}GB"

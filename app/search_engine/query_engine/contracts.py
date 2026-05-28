@@ -51,6 +51,47 @@ class AnalysisWarning:
 
 
 @dataclass(slots=True)
+class DSLFilter:
+    scope: str
+    field: str
+    operator: Operator
+    value: Any
+    source_text: str = ""
+    confidence: float = 1.0
+
+
+@dataclass(slots=True)
+class DSLSort:
+    scope: str
+    field: str
+    direction: SortDirection = "desc"
+    source_text: str = ""
+
+
+@dataclass(slots=True)
+class QueryDSL:
+    semantic_query: str = ""
+    filters: list[DSLFilter] = field(default_factory=list)
+    sorts: list[DSLSort] = field(default_factory=list)
+    target_scopes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ValidationIssue:
+    code: str
+    message: str
+    path: str = ""
+    level: Literal["warning", "error"] = "warning"
+
+
+@dataclass(slots=True)
+class ValidatedQueryDSL:
+    dsl: QueryDSL
+    valid: bool = True
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class SearchPlan:
     raw_query: str
     normalized_query: str

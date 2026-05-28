@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from config.enums import AIStatus
-from document_ai.embedding.embeding_models import bge_m3_embedder
+from document_ai.embedding.embeding_models import embed_document
 from document_ai.models import ChunkEmbedding, DocumentChunk
 from document_ai.parsers.config import get_embedding_backend, get_embedding_model
 from document_ai.parsers.text_utils import normalize_extracted_text
@@ -85,7 +85,7 @@ class Command(BaseCommand):
                 continue
 
             try:
-                embedding = bge_m3_embedder(
+                embedding = embed_document(
                     text=text,
                     model_name=model_name,
                     backend=backend,

@@ -42,6 +42,7 @@ urlpatterns = [
     path("files/", include("files.urls")),
     path("document-ai/sandbox/", SandboxPageView.as_view(), name="document-ai-sandbox"),
     path("api/document-ai/", include("document_ai.urls")),
+    path("api/sync/", include("files.sync_api.urls")),
 
     # Swagger Documentation URLs
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),

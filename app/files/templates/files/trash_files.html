@@ -12,6 +12,14 @@
   </div>
 </div>
 
+<div id="bulkTrashToolbar" style="display:none; align-items:center; justify-content:space-between; gap:12px; padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:12px;">
+  <strong class="meta-text" id="trashSelectedCount">0 selected</strong>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <button type="button" class="btn btn-secondary" onclick="bulkRestore()">Restore selected</button>
+    <button type="button" class="btn btn-secondary" onclick="clearTrashSelection()">Clear</button>
+  </div>
+</div>
+
 <div style="background:var(--bg); border-radius:var(--radius); padding:11px 16px; font-size:13px; color:var(--muted); margin-bottom:16px; display:flex; align-items:center; gap:8px;">
   <span>i</span>
   <span>Trashed files are kept for 7 days before automatic removal.</span>
@@ -21,6 +29,7 @@
   <table class="file-table">
     <thead>
       <tr>
+        <th style="width:40px;"><input type="checkbox" id="selectAllTrash" onchange="toggleSelectAllTrash(this.checked)"></th>
         <th>Name</th>
         <th>Size</th>
         <th>Deleted on</th>
@@ -66,12 +75,19 @@
   }
 
   document.addEventListener("DOMContentLoaded", fetchTrash);
+  let trashFiles = [];
+  let selectedTrashUids = new Set();
 
   function fetchTrash() {
     fetch('/files/api/v1/trash/')
       .then(res => res.json())
       .then(data => {
         if (data.ok) {
+          trashFiles = data.files || [];
+          const valid = new Set(trashFiles.map((file) => file.uid));
+          selectedTrashUids.forEach((uid) => {
+            if (!valid.has(uid)) selectedTrashUids.delete(uid);
+          });
           renderTable(data.files);
         }
       });
@@ -88,6 +104,7 @@
       wrap.style.display = 'none';
       emptyAction.style.display = 'none';
       empty.style.display = 'block';
+      updateTrashBulkToolbar();
       return;
     }
 
@@ -98,9 +115,13 @@
     files.forEach(f => {
       const daysLeft = Number.isFinite(f.days_until_purge) ? f.days_until_purge : 0;
       const deletedAt = f.deleted_at ? new Date(f.deleted_at).toLocaleDateString() : '-';
+      const selected = selectedTrashUids.has(f.uid);
 
       const tr = document.createElement('tr');
       tr.innerHTML = `
+        <td>
+          <input type="checkbox" ${selected ? 'checked' : ''} onchange="toggleTrashSelection('${f.uid}', this.checked)">
+        </td>
         <td>
           <div class="file-name-cell" style="opacity:0.6;">
             <span class="file-name-text">${escapeHtml(f.name)}</span>
@@ -121,6 +142,58 @@
         </td>
       `;
       tbody.appendChild(tr);
+    });
+    updateTrashBulkToolbar();
+  }
+
+  function updateTrashBulkToolbar() {
+    const count = selectedTrashUids.size;
+    document.getElementById('bulkTrashToolbar').style.display = count > 0 ? 'flex' : 'none';
+    document.getElementById('trashSelectedCount').textContent = `${count} selected`;
+    const selectAll = document.getElementById('selectAllTrash');
+    if (selectAll) {
+      selectAll.checked = trashFiles.length > 0 && trashFiles.every((file) => selectedTrashUids.has(file.uid));
+      selectAll.indeterminate = trashFiles.some((file) => selectedTrashUids.has(file.uid)) && !selectAll.checked;
+    }
+  }
+
+  function toggleTrashSelection(uid, checked) {
+    if (checked) selectedTrashUids.add(uid);
+    else selectedTrashUids.delete(uid);
+    updateTrashBulkToolbar();
+  }
+
+  function toggleSelectAllTrash(checked) {
+    trashFiles.forEach((file) => {
+      if (checked) selectedTrashUids.add(file.uid);
+      else selectedTrashUids.delete(file.uid);
+    });
+    renderTable(trashFiles);
+  }
+
+  function clearTrashSelection() {
+    selectedTrashUids.clear();
+    renderTable(trashFiles);
+  }
+
+  function bulkRestore() {
+    const uids = Array.from(selectedTrashUids);
+    if (uids.length === 0) return;
+    fetch('/files/api/v1/bulk/restore/', {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ uids })
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (!data.ok) {
+        alert((data.errors || ['Unable to restore selected items.']).join('\n'));
+      }
+      selectedTrashUids.clear();
+      fetchTrash();
     });
   }
 

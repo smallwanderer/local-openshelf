@@ -1,0 +1,960 @@
+{% extends "files/base.html" %}
+{% load static %}
+
+{% block title %}RAG 질문 | Openshelf{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<style>
+  .rag-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .rag-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .rag-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .rag-select,
+  .rag-input,
+  .rag-textarea {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font);
+    outline: none;
+  }
+  .rag-select {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+  .rag-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 330px;
+    gap: 16px;
+    align-items: stretch;
+  }
+  .ai-readiness-panel {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr);
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+  }
+  .ai-readiness-title {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .ai-readiness-title strong {
+    font-size: 13px;
+  }
+  .ai-readiness-summary {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .ai-readiness-meter {
+    display: grid;
+    gap: 7px;
+  }
+  .ai-readiness-bar {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .ai-readiness-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+  .ai-readiness-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .scope-picker {
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .scope-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .scope-picker-header strong {
+    font-size: 13px;
+  }
+  .scope-picker-body {
+    display: grid;
+    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px 14px;
+  }
+  .scope-picker.collapsed .scope-picker-body {
+    display: none;
+  }
+  .scope-picker-toggle {
+    min-width: 84px;
+  }
+  .scope-search {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+  }
+  .scope-list {
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .scope-node {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .scope-node.folder {
+    background: var(--bg);
+  }
+  .scope-node:last-child {
+    border-bottom: 0;
+  }
+  .scope-node-main {
+    min-width: 0;
+  }
+  .scope-node-name,
+  .scope-node-path {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .scope-node-name {
+    font-weight: 700;
+  }
+  .scope-node-path,
+  .scope-node-meta {
+    color: var(--muted);
+  }
+  .scope-node-meta {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .scope-selected-list {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    min-height: 42px;
+  }
+  .scope-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    font-size: 12px;
+  }
+  .scope-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .scope-chip button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+  }
+  .rag-chat,
+  .rag-sources {
+    min-height: 620px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .rag-chat {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+  }
+  .rag-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .rag-progress {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .rag-step {
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    background: var(--bg);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+  }
+  .rag-step.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .rag-step.done {
+    border-color: rgba(34, 197, 94, 0.35);
+    color: #15803d;
+    background: rgba(34, 197, 94, 0.08);
+  }
+  .rag-step.failed {
+    border-color: rgba(220, 38, 38, 0.35);
+    color: #b91c1c;
+    background: rgba(220, 38, 38, 0.08);
+  }
+  .scope-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    background: var(--surface);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .rag-messages {
+    padding: 18px;
+    overflow-y: auto;
+  }
+  .rag-message {
+    max-width: 82%;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .rag-message.user {
+    margin-left: auto;
+    background: var(--accent);
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  .rag-message.assistant {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .citation {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    margin: 0 2px;
+    border-radius: 999px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 800;
+    border: 0;
+    cursor: pointer;
+    font-family: var(--font);
+  }
+  .rag-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .rag-compose {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    padding: 14px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .rag-textarea {
+    min-height: 48px;
+    max-height: 120px;
+    padding: 12px;
+    resize: vertical;
+    font-size: 14px;
+  }
+  .rag-send {
+    align-self: end;
+    min-width: 76px;
+  }
+  .rag-sources {
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+  .sources-header {
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .sources-header strong {
+    display: block;
+    font-size: 14px;
+  }
+  .sources-header span {
+    display: block;
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .source-list {
+    padding: 12px;
+    overflow-y: auto;
+  }
+  .source-item {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    background: var(--surface);
+  }
+  .source-item.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-bg);
+  }
+  .source-rank {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 800;
+    margin-right: 6px;
+  }
+  .source-title {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.4;
+  }
+  .source-meta,
+  .source-score {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .source-excerpt {
+    margin-top: 8px;
+    padding: 9px;
+    border-radius: var(--radius);
+    background: var(--bg);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .source-empty {
+    padding: 12px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+    background: var(--bg);
+  }
+  .scope-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  @media (max-width: 980px) {
+    .rag-shell {
+      grid-template-columns: 1fr;
+    }
+    .rag-chat,
+    .rag-sources {
+      min-height: auto;
+    }
+    .rag-sources {
+      max-height: 420px;
+    }
+    .scope-picker-body {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block files_body %}
+<div class="rag-header">
+  <h2>RAG 질문</h2>
+  <div class="rag-controls">
+    <select class="rag-select" id="scopeSelect">
+      <option value="all">전체 문서</option>
+      <option value="selected">선택한 문서/폴더</option>
+    </select>
+    <select class="rag-select" id="topKSelect">
+      <option value="2">근거 2개</option>
+      <option value="3" selected>근거 3개</option>
+      <option value="5">근거 5개</option>
+    </select>
+    <select class="rag-select" id="languageSelect">
+      <option value="ko" selected>Kor</option>
+      <option value="en">Eng</option>
+    </select>
+  </div>
+</div>
+
+<div class="scope-picker" id="scopePicker">
+  <div class="scope-picker-header">
+    <div>
+      <strong>검색 범위 선택</strong>
+      <span class="ai-readiness-summary" id="scopePickerSummary">전체 문서를 대상으로 질문합니다.</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button type="button" class="btn btn-secondary" id="clearScopeBtn" style="padding:6px 10px;font-size:12px;">선택 해제</button>
+      <button type="button" class="btn btn-secondary scope-picker-toggle" id="scopePickerToggle" style="padding:6px 10px;font-size:12px;">펼치기</button>
+    </div>
+  </div>
+  <div class="scope-picker-body">
+    <div>
+      <input class="scope-search" type="search" id="scopeSearch" placeholder="문서 또는 폴더 검색">
+      <div class="scope-list" id="scopeNodeList" style="margin-top:8px;">
+        <div class="source-empty">목록을 불러오는 중입니다.</div>
+      </div>
+    </div>
+    <div>
+      <div class="scope-selected-list" id="scopeSelectedList">
+        <div class="source-empty">선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-readiness-panel" id="aiReadinessPanel">
+  <div class="ai-readiness-title">
+    <strong>AI 분석 준비 상태</strong>
+    <span class="ai-readiness-summary" id="aiReadinessSummary">상태를 불러오는 중입니다.</span>
+  </div>
+  <div class="ai-readiness-meter">
+    <div class="ai-readiness-bar" aria-hidden="true">
+      <div class="ai-readiness-fill" id="aiReadinessFill"></div>
+    </div>
+    <div class="ai-readiness-stats" id="aiReadinessStats">
+      <span>검색 가능 0/0</span>
+    </div>
+  </div>
+</div>
+
+<div class="rag-shell">
+  <section class="rag-chat" aria-label="RAG question workspace">
+    <div class="rag-toolbar">
+      <span class="scope-pill" id="scopePill">전체 문서</span>
+      <span class="scope-summary" id="selectedSummary">선택 문서 없음</span>
+    </div>
+    <div class="rag-progress" id="ragProgress" aria-label="RAG progress">
+      <div class="rag-step" data-step="search">근거 검색</div>
+      <div class="rag-step" data-step="answer">답변 생성</div>
+      <div class="rag-step" data-step="done">완료</div>
+    </div>
+
+    <div class="rag-messages" id="ragMessages">
+      <div class="rag-message assistant">
+        질문을 입력하면 관련 문서를 먼저 찾고, 이어서 근거 기반 답변을 생성합니다.
+      </div>
+    </div>
+
+    <form class="rag-compose" id="ragForm">
+      <textarea class="rag-textarea" id="ragQuestion" placeholder="문서에 대해 질문하세요"></textarea>
+      <button type="submit" class="btn btn-primary rag-send">전송</button>
+    </form>
+  </section>
+
+  <aside class="rag-sources" aria-label="RAG sources">
+    <div class="sources-header">
+      <strong>근거 문서</strong>
+      <span>Score · Page · Section</span>
+    </div>
+    <div class="source-list" id="sourceList">
+      <div class="source-empty">질문을 입력하면 검색된 근거가 여기에 표시됩니다.</div>
+    </div>
+  </aside>
+</div>
+
+<script id="selectedNodesData" type="text/plain">{{ selected_nodes|default:"" }}</script>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  const selectedNodesRaw = document.getElementById('selectedNodesData').textContent.trim();
+  const selectedNodeIds = new Set(selectedNodesRaw ? selectedNodesRaw.split(',').filter(Boolean) : []);
+  const scopeNodeMap = new Map();
+  const scopeSelect = document.getElementById('scopeSelect');
+  const scopePill = document.getElementById('scopePill');
+  const selectedSummary = document.getElementById('selectedSummary');
+  const scopeSearch = document.getElementById('scopeSearch');
+  const scopeNodeList = document.getElementById('scopeNodeList');
+  const scopeSelectedList = document.getElementById('scopeSelectedList');
+  const scopePicker = document.getElementById('scopePicker');
+  const scopePickerSummary = document.getElementById('scopePickerSummary');
+  const scopePickerToggle = document.getElementById('scopePickerToggle');
+  const clearScopeBtn = document.getElementById('clearScopeBtn');
+  const ragForm = document.getElementById('ragForm');
+  const ragQuestion = document.getElementById('ragQuestion');
+  const ragMessages = document.getElementById('ragMessages');
+  const sourceList = document.getElementById('sourceList');
+  const topKSelect = document.getElementById('topKSelect');
+  const languageSelect = document.getElementById('languageSelect');
+  const ragProgress = document.getElementById('ragProgress');
+  const aiReadinessSummary = document.getElementById('aiReadinessSummary');
+  const aiReadinessFill = document.getElementById('aiReadinessFill');
+  const aiReadinessStats = document.getElementById('aiReadinessStats');
+  let activePollTimer = null;
+  let lastRequest = null;
+
+  function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+      const cookies = document.cookie.split(';');
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
+      }
+    }
+    return cookieValue;
+  }
+
+  function updateScopeSummary() {
+    const selectedCount = selectedNodeIds.size;
+    if (selectedCount > 0) {
+      scopeSelect.value = 'selected';
+      selectedSummary.textContent = `${selectedCount}개 문서/폴더 선택됨`;
+      scopePickerSummary.textContent = `${selectedCount}개 문서/폴더 범위로 제한합니다.`;
+    } else {
+      selectedSummary.textContent = '선택 문서 없음';
+      scopePickerSummary.textContent = '전체 문서를 대상으로 질문합니다.';
+    }
+    const selectedOption = scopeSelect.options[scopeSelect.selectedIndex];
+    scopePill.textContent = selectedOption ? selectedOption.textContent : '전체 문서';
+    renderSelectedScope();
+  }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function setProgress(stage) {
+    const rank = { idle: 0, search: 1, answer: 2, done: 3, failed: -1 };
+    ragProgress.querySelectorAll('.rag-step').forEach((step) => {
+      const stepName = step.dataset.step;
+      const stepRank = rank[stepName] || 0;
+      step.classList.remove('active', 'done', 'failed');
+      if (stage === 'failed') {
+        step.classList.add('failed');
+      } else if (rank[stage] === stepRank) {
+        step.classList.add('active');
+      } else if (rank[stage] > stepRank) {
+        step.classList.add('done');
+      }
+    });
+  }
+
+  function buildPayload(question) {
+    const payload = {
+      question,
+      top_k: parseInt(topKSelect.value, 10),
+      language: languageSelect.value,
+    };
+    if (scopeSelect.value === 'selected' && selectedNodeIds.size > 0) {
+      payload.node_ids = Array.from(selectedNodeIds);
+    }
+    return payload;
+  }
+
+  function nodeIcon(node) {
+    return node.node_type === 'directory' ? '폴더' : '문서';
+  }
+
+  function renderScopeNodes(nodes) {
+    if (!nodes.length) {
+      scopeNodeList.innerHTML = '<div class="source-empty">표시할 문서나 폴더가 없습니다.</div>';
+      return;
+    }
+    nodes.forEach((node) => scopeNodeMap.set(node.uid, node));
+    scopeNodeList.innerHTML = nodes.map((node) => {
+      const checked = selectedNodeIds.has(node.uid) ? 'checked' : '';
+      const meta = node.node_type === 'directory'
+        ? `${node.file_count || 0}개 파일`
+        : (node.ext || '파일');
+      const indent = Math.min(Number(node.depth || 0), 8) * 14;
+      const rowClass = node.node_type === 'directory' ? 'scope-node folder' : 'scope-node';
+      return `
+        <label class="${rowClass}" style="padding-left:${10 + indent}px;">
+          <input type="checkbox" class="scope-node-check" value="${escapeHtml(node.uid)}" ${checked}>
+          <span class="scope-node-main">
+            <span class="scope-node-name">${escapeHtml(nodeIcon(node))} · ${escapeHtml(node.name)}</span>
+            <span class="scope-node-path">${escapeHtml(node.path)}</span>
+          </span>
+          <span class="scope-node-meta">${escapeHtml(meta)}</span>
+        </label>
+      `;
+    }).join('');
+  }
+
+  function renderSelectedScope() {
+    if (!selectedNodeIds.size) {
+      scopeSelectedList.innerHTML = '<div class="source-empty">선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.</div>';
+      return;
+    }
+    scopeSelectedList.innerHTML = Array.from(selectedNodeIds).map((uid) => {
+      const node = scopeNodeMap.get(uid);
+      const label = node ? `${nodeIcon(node)} · ${node.name}` : uid;
+      return `
+        <span class="scope-chip" title="${escapeHtml(node ? node.path : uid)}">
+          <span>${escapeHtml(label)}</span>
+          <button type="button" data-remove-scope="${escapeHtml(uid)}" aria-label="remove">x</button>
+        </span>
+      `;
+    }).join('');
+  }
+
+  function loadScopeNodes(query = '') {
+    const url = new URL('/files/api/v1/rag/scope-nodes/', window.location.origin);
+    if (query) url.searchParams.set('q', query);
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`scope nodes failed: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!data.ok) throw new Error('scope nodes response not ok');
+        renderScopeNodes(data.nodes || []);
+        updateScopeSummary();
+      })
+      .catch(() => {
+        scopeNodeList.innerHTML = '<div class="source-empty">문서/폴더 목록을 불러올 수 없습니다.</div>';
+      });
+  }
+
+  function setScopePickerCollapsed(collapsed) {
+    scopePicker.classList.toggle('collapsed', collapsed);
+    scopePickerToggle.textContent = collapsed ? '펼치기' : '접기';
+  }
+
+  function setMessageHtml(messageId, html) {
+    const messageEl = document.getElementById(messageId);
+    if (messageEl) messageEl.innerHTML = html;
+  }
+
+  function renderRetryAction(label = '다시 시도') {
+    return `<div class="rag-actions"><button type="button" class="btn btn-secondary retry-rag-button">${escapeHtml(label)}</button></div>`;
+  }
+
+  function loadAIReadiness() {
+    fetch('/files/api/v1/ai/readiness/')
+      .then((res) => {
+        if (!res.ok) throw new Error(`readiness failed: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!data.ok) throw new Error('readiness response not ok');
+        const readyPercent = Number(data.ready_percent || 0);
+        aiReadinessFill.style.width = `${Math.min(Math.max(readyPercent, 0), 100)}%`;
+        aiReadinessSummary.textContent = data.summary || 'AI 분석 준비 상태를 확인했습니다.';
+        aiReadinessStats.innerHTML = `
+          <span>검색 가능 ${data.searchable_files}/${data.total_files}</span>
+          <span>파싱 ${data.parse.completed} 완료 · ${data.parse.processing} 진행 · ${data.parse.failed} 실패</span>
+          <span>임베딩 ${data.embedding.completed} 완료 · ${data.embedding.processing} 진행 · ${data.embedding.failed} 실패</span>
+        `;
+      })
+      .catch(() => {
+        aiReadinessSummary.textContent = 'AI 분석 준비 상태를 불러올 수 없습니다.';
+        aiReadinessFill.style.width = '0%';
+        aiReadinessStats.innerHTML = '<span>상태 확인 실패</span>';
+      });
+  }
+
+  scopeSelect.addEventListener('change', updateScopeSummary);
+  scopePickerToggle.addEventListener('click', () => {
+    setScopePickerCollapsed(!scopePicker.classList.contains('collapsed'));
+  });
+  scopeSearch.addEventListener('input', () => {
+    clearTimeout(scopeSearch._timer);
+    scopeSearch._timer = setTimeout(() => loadScopeNodes(scopeSearch.value.trim()), 250);
+  });
+  scopeNodeList.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('.scope-node-check');
+    if (!checkbox) return;
+    if (checkbox.checked) {
+      selectedNodeIds.add(checkbox.value);
+    } else {
+      selectedNodeIds.delete(checkbox.value);
+    }
+    updateScopeSummary();
+  });
+  scopeSelectedList.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('[data-remove-scope]');
+    if (!removeButton) return;
+    selectedNodeIds.delete(removeButton.dataset.removeScope);
+    scopeNodeList.querySelectorAll('.scope-node-check').forEach((checkbox) => {
+      if (checkbox.value === removeButton.dataset.removeScope) checkbox.checked = false;
+    });
+    updateScopeSummary();
+  });
+  clearScopeBtn.addEventListener('click', () => {
+    selectedNodeIds.clear();
+    scopeNodeList.querySelectorAll('.scope-node-check').forEach((checkbox) => {
+      checkbox.checked = false;
+    });
+    scopeSelect.value = 'all';
+    updateScopeSummary();
+  });
+  ragForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const question = ragQuestion.value.trim();
+    if (!question) return;
+    startRagRequest(question);
+  });
+
+  async function startRagRequest(question, existingPayload = null) {
+    ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message user">${escapeHtml(question)}</div>`);
+    const pendingId = `rag-pending-${Date.now()}`;
+    ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message assistant" id="${pendingId}">검색 작업을 시작했습니다.</div>`);
+    ragQuestion.value = '';
+    ragMessages.scrollTop = ragMessages.scrollHeight;
+    sourceList.innerHTML = '<div class="source-empty">관련 문서를 검색 중입니다.</div>';
+    setProgress('search');
+
+    try {
+      const payload = existingPayload || buildPayload(question);
+      lastRequest = { question, payload };
+
+      const response = await fetch('/api/document-ai/v1/rag/', {
+        method: 'POST',
+        headers: {
+          'X-CSRFToken': getCookie('csrftoken'),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`RAG request failed: ${response.status}`);
+      const data = await response.json();
+      pollRagJob(data.job_id, pendingId, 0);
+    } catch (error) {
+      setProgress('failed');
+      setMessageHtml(pendingId, `RAG 요청 중 오류가 발생했습니다.${renderRetryAction()}`);
+      console.error(error);
+    }
+  }
+
+  function pollRagJob(jobId, messageId, attempt) {
+    if (activePollTimer) clearTimeout(activePollTimer);
+    fetch(`/api/document-ai/v1/rag/jobs/${jobId}/`, {
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'Content-Type': 'application/json',
+      },
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`RAG job poll failed: ${response.status}`);
+        return response.json();
+      })
+      .then((job) => {
+        const messageEl = document.getElementById(messageId);
+        if (!messageEl) return;
+
+        if (job.status === 'completed') {
+          messageEl.innerHTML = renderAnswer(job.answer);
+          const finalSources = job.citations && job.citations.length
+            ? job.citations
+            : flattenSearchResults(job.search_results || []);
+          renderSources(finalSources);
+          setProgress('done');
+          ragMessages.scrollTop = ragMessages.scrollHeight;
+          return;
+        }
+
+        if (job.status === 'failed') {
+          setProgress('failed');
+          messageEl.innerHTML = `${escapeHtml(job.error_message || 'RAG 답변 생성에 실패했습니다.')}${renderRetryAction()}`;
+          const failedSources = job.citations && job.citations.length
+            ? job.citations
+            : flattenSearchResults(job.search_results || []);
+          renderSources(failedSources);
+          return;
+        }
+
+        if (job.search_status === 'completed') {
+          const preliminarySources = flattenSearchResults(job.search_results || []);
+          setProgress('answer');
+          if (preliminarySources.length) {
+            renderSources(preliminarySources, { preliminary: true });
+            messageEl.textContent = `관련 근거 ${preliminarySources.length}개를 찾았습니다. 답변을 생성 중입니다.`;
+          } else {
+            messageEl.textContent = '근거 검색은 끝났지만 표시할 근거가 없습니다. 답변 생성을 확인 중입니다.';
+          }
+        } else {
+          setProgress('search');
+          messageEl.textContent = '관련 문서를 검색 중입니다.';
+        }
+
+        if (attempt >= 120) {
+          setProgress('failed');
+          messageEl.innerHTML = `작업이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.${renderRetryAction('같은 질문 다시 실행')}`;
+          return;
+        }
+        activePollTimer = setTimeout(() => pollRagJob(jobId, messageId, attempt + 1), 1500);
+      })
+      .catch((error) => {
+        const messageEl = document.getElementById(messageId);
+        setProgress('failed');
+        if (messageEl) messageEl.innerHTML = `RAG 작업 상태 확인 중 오류가 발생했습니다.${renderRetryAction()}`;
+        console.error(error);
+      });
+  }
+
+  function renderAnswer(answer) {
+    return escapeHtml(answer || '답변이 비어 있습니다.')
+      .replace(/\[(\d+)\]/g, '<button type="button" class="citation" data-citation-id="$1">$1</button>')
+      .replace(/\n/g, '<br>');
+  }
+
+  function flattenSearchResults(results) {
+    const citations = [];
+    let id = 1;
+    (results || []).forEach((result) => {
+      (result.evidences || []).forEach((evidence) => {
+        citations.push({
+          id,
+          node_id: result.node_id,
+          node_name: result.node_name,
+          chunk_id: evidence.chunk_id,
+          section: evidence.section || '',
+          pages: evidence.pages || '',
+          doc_score: result.doc_score,
+          hybrid_score: evidence.hybrid_score,
+          dense_score: evidence.dense_score,
+          sparse_score: evidence.sparse_score,
+          text: evidence.compressed_text || evidence.context_text || evidence.text || '',
+        });
+        id += 1;
+      });
+    });
+    return citations;
+  }
+
+  function renderSources(citations, options = {}) {
+    if (!citations.length) {
+      sourceList.innerHTML = '<div class="source-empty">표시할 근거가 없습니다.</div>';
+      return;
+    }
+    const prefix = options.preliminary
+      ? '<div class="source-empty" style="margin-bottom:10px;">답변 생성 전에 먼저 찾은 근거입니다.</div>'
+      : '';
+    sourceList.innerHTML = citations.map((citation) => {
+      const scoreParts = [];
+      if (citation.hybrid_score !== null && citation.hybrid_score !== undefined) scoreParts.push(`Hybrid ${Number(citation.hybrid_score).toFixed(3)}`);
+      if (citation.dense_score !== null && citation.dense_score !== undefined) scoreParts.push(`Dense ${Number(citation.dense_score).toFixed(3)}`);
+      if (citation.sparse_score !== null && citation.sparse_score !== undefined) scoreParts.push(`Sparse ${Number(citation.sparse_score).toFixed(3)}`);
+      return `
+        <article class="source-item" id="source-${escapeHtml(citation.id)}" data-citation-id="${escapeHtml(citation.id)}">
+          <div class="source-title"><span class="source-rank">${escapeHtml(citation.id)}</span>${escapeHtml(citation.node_name)}</div>
+          <div class="source-meta">page ${escapeHtml(citation.pages || 'N/A')} · SECTION: ${escapeHtml(citation.section || 'N/A')}</div>
+          <div class="source-score">${escapeHtml(scoreParts.join(' · ') || 'Score N/A')}</div>
+          <div class="source-excerpt">${escapeHtml(citation.text || '')}</div>
+        </article>
+      `;
+    }).join('');
+    sourceList.innerHTML = prefix + sourceList.innerHTML;
+  }
+
+  function focusCitation(citationId) {
+    sourceList.querySelectorAll('.source-item').forEach((item) => {
+      item.classList.toggle('active', item.dataset.citationId === String(citationId));
+    });
+    const target = document.getElementById(`source-${citationId}`);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  ragMessages.addEventListener('click', (event) => {
+    const citationButton = event.target.closest('.citation');
+    if (citationButton) {
+      focusCitation(citationButton.dataset.citationId);
+      return;
+    }
+    if (event.target.closest('.retry-rag-button') && lastRequest) {
+      startRagRequest(lastRequest.question, lastRequest.payload);
+    }
+  });
+
+  updateScopeSummary();
+  setScopePickerCollapsed(selectedNodeIds.size === 0);
+  loadScopeNodes();
+  loadAIReadiness();
+  setProgress('idle');
+</script>
+{% endblock %}

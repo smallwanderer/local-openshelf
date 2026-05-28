@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220" role="img" aria-labelledby="title desc">
+  <title id="title">RAG question workspace</title>
+  <desc id="desc">Documents connected to a question and cited answer.</desc>
+  <defs>
+    <linearGradient id="panel" x1="32" y1="24" x2="286" y2="196" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0F2FE"/>
+      <stop offset="1" stop-color="#DCFCE7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="88" y1="50" x2="222" y2="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect x="18" y="18" width="284" height="184" rx="22" fill="url(#panel)"/>
+  <rect x="44" y="44" width="100" height="132" rx="12" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="3"/>
+  <rect x="58" y="63" width="58" height="8" rx="4" fill="#93C5FD"/>
+  <rect x="58" y="86" width="70" height="7" rx="3.5" fill="#CBD5E1"/>
+  <rect x="58" y="104" width="56" height="7" rx="3.5" fill="#CBD5E1"/>
+  <rect x="58" y="122" width="74" height="7" rx="3.5" fill="#CBD5E1"/>
+  <rect x="176" y="58" width="86" height="64" rx="15" fill="#FFFFFF" stroke="#86EFAC" stroke-width="3"/>
+  <path d="M194 92h45" stroke="#059669" stroke-width="7" stroke-linecap="round"/>
+  <path d="M194 108h30" stroke="#A7F3D0" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="156" cy="110" r="29" fill="url(#accent)"/>
+  <path d="M143 107c0-9 7-16 17-16 9 0 16 6 16 14 0 11-12 13-12 23" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="162" cy="145" r="5" fill="#FFFFFF"/>
+  <path d="M146 80l-18-16M177 86l24-20M183 132l28 18M132 130l-24 18" stroke="#2563EB" stroke-width="4" stroke-linecap="round" opacity=".42"/>
+</svg>

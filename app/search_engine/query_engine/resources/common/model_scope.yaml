@@ -2,7 +2,7 @@
 
 node:
   model: files.Node
-  fields: [name, ext, node_type, path, trashed, owner]
+  fields: [uid, name, ext, node_type, description, path, starred, trashed, deleted_at, created_at, updated_at, owner]
 
 fileblob:
   model: files.FileBlob
@@ -10,15 +10,15 @@ fileblob:
 
 parse_result:
   model: document_ai.DocumentParseResult
-  fields: [parser_name, status, chunk_count, metadata]
+  fields: [parser_name, status, chunk_count, metadata, created_at, updated_at]
 
 chunk:
   model: document_ai.DocumentChunk
-  fields: [chunk_index, text, page_from, page_to]
+  fields: [chunk_index, text, page_from, page_to, status, created_at, updated_at]
 
 embedding:
   model: document_ai.ChunkEmbedding
-  fields: [model_name, vector, sparse_vector]
+  fields: [model_name, model_version, vector, sparse_vector, status, embedded_at]
 
 user:
   model: accounts.User

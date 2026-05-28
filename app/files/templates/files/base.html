@@ -25,6 +25,44 @@
     margin-bottom: 20px;
   }
 
+  .rag-entry-card {
+    display: block;
+    padding: 10px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+  }
+  .rag-entry-card:hover,
+  .rag-entry-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.11);
+    transform: translateY(-1px);
+  }
+  .rag-entry-card img {
+    width: 100%;
+    display: block;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+    margin-bottom: 7px;
+  }
+  .rag-entry-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .rag-entry-subtitle {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
   .sidebar-section {
     margin-bottom: 20px;
   }
@@ -256,6 +294,16 @@
       + 파일 업로드
     </a>
 
+    <a href="{% url 'files:page_rag' %}"
+       class="rag-entry-card {% if request.resolver_match.url_name == 'page_rag' %}active{% endif %}">
+      <img src="{% static 'assets/rag/rag-question.svg' %}" alt="">
+      <span class="rag-entry-title">
+        <span>RAG 질문</span>
+        <span aria-hidden="true">→</span>
+      </span>
+      <span class="rag-entry-subtitle">문서 근거 기반 답변</span>
+    </a>
+
     <div class="sidebar-section">
       <p class="sidebar-section-title">탐색</p>
       <nav class="sidebar-nav">
@@ -276,6 +324,12 @@
            class="{% if request.resolver_match.url_name == 'page_starred' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           즐겨찾기
+        </a>
+
+        <a href="{% url 'files:page_ai_history' %}"
+           class="{% if request.resolver_match.url_name == 'page_ai_history' %}active{% endif %}">
+          <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          AI 검색 기록
         </a>
 
         <a href="{% url 'files:page_trash' %}"

@@ -56,3 +56,31 @@ def starred(request):
 def trash(request):
     return render(request, "files/trash_files.html")
 
+
+@login_required
+@email_verification_required
+def rag_workspace(request):
+    selected_nodes = request.GET.get("nodes", "").strip()
+    return render(request, "files/rag_workspace.html", {
+        "selected_nodes": selected_nodes,
+    })
+
+@login_required
+@email_verification_required
+def ai_search_history(request):
+    from document_ai.models import RAGJob
+    from django.core.paginator import Paginator
+
+    history_list = RAGJob.objects.filter(
+        owner=request.user, 
+        status="completed"
+    ).order_by("-completed_at").select_related("search_job")
+
+    paginator = Paginator(history_list, 10)  # Show 10 per page
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    return render(request, "files/ai_search_history.html", {
+        "page_obj": page_obj,
+    })
+

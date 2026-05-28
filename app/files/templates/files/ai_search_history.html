@@ -1,0 +1,206 @@
+{% extends "files/base.html" %}
+{% load static %}
+
+{% block title %}AI 검색 기록 | Openshelf{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<style>
+  .history-page-header {
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .history-page-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0;
+  }
+  
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .history-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  }
+  
+  .history-q {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  
+  .history-a {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    background: var(--bg);
+    padding: 16px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+  }
+  
+  .history-meta {
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+
+  .cit-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .cit-toggle-btn:hover {
+    background: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .history-citations {
+    display: none;
+    margin-top: 16px;
+    gap: 8px;
+    flex-direction: column;
+  }
+  .history-citations.show {
+    display: flex;
+  }
+  
+  .cit-card {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .cit-card-header {
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 13px;
+    margin-bottom: 6px;
+  }
+  .cit-card-text {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .pagination {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 32px;
+  }
+  .page-btn {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .page-btn:hover {
+    background: var(--bg);
+    border-color: var(--accent);
+  }
+  .page-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+</style>
+{% endblock %}
+
+{% block files_body %}
+<div class="history-page-header">
+  <svg viewBox="0 0 24 24" style="width:24px; height:24px; stroke:var(--accent); fill:none; stroke-width:2;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+  <h2>AI 검색 전체 기록</h2>
+</div>
+
+<div class="history-list">
+  {% for job in page_obj %}
+  <div class="history-item">
+    <div class="history-q">Q. {{ job.question }}</div>
+    <div class="history-a">{{ job.answer|default:"답변 생성에 실패했거나 내용이 없습니다." }}</div>
+    
+    <div class="history-meta">
+      <span>{{ job.completed_at|date:"Y년 m월 d일 H:i" }}</span>
+      <button class="cit-toggle-btn" onclick="toggleCitations('cit_{{ job.id }}')">
+        참고 문서 ({{ job.citations|length }}건) 보기
+      </button>
+    </div>
+    
+    <div class="history-citations" id="cit_{{ job.id }}">
+      {% if job.citations %}
+        {% for cit in job.citations %}
+        <div class="cit-card">
+          <div class="cit-card-header">
+            [{{ forloop.counter }}] {{ cit.title|default:"출처 문서" }}
+            {% if cit.page %}<span style="color:var(--muted); font-weight:normal; margin-left:6px;">Page {{ cit.page }}</span>{% endif %}
+          </div>
+          <div class="cit-card-text">{{ cit.text }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="cit-card"><div class="cit-card-text" style="color:var(--muted);">등록된 참고 문서가 없습니다.</div></div>
+      {% endif %}
+    </div>
+  </div>
+  {% empty %}
+  <div class="empty-state" style="padding: 40px; text-align: center;">
+    <div style="font-size:40px; margin-bottom:16px;">🔍</div>
+    <h3 style="margin-bottom:8px;">검색 기록이 없습니다</h3>
+    <p style="color:var(--muted);">AI를 사용해 문서를 검색하면 이곳에 기록이 저장됩니다.</p>
+  </div>
+  {% endfor %}
+</div>
+
+{% if page_obj.has_other_pages %}
+<div class="pagination">
+  {% if page_obj.has_previous %}
+    <a href="?page=1" class="page-btn">&laquo; 처음</a>
+    <a href="?page={{ page_obj.previous_page_number }}" class="page-btn">이전</a>
+  {% endif %}
+
+  <span class="page-btn active">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+
+  {% if page_obj.has_next %}
+    <a href="?page={{ page_obj.next_page_number }}" class="page-btn">다음</a>
+    <a href="?page={{ page_obj.paginator.num_pages }}" class="page-btn">마지막 &raquo;</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  function toggleCitations(id) {
+    const el = document.getElementById(id);
+    if (el.classList.contains('show')) {
+      el.classList.remove('show');
+    } else {
+      el.classList.add('show');
+    }
+  }
+</script>
+{% endblock %}

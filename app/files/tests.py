@@ -1,8 +1,10 @@
 from datetime import timedelta
+import json
+
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from unittest.mock import patch
 
@@ -265,3 +267,192 @@ class StorageServiceTests(TestCase):
 
         self.assertFalse(Node.objects.filter(pk=self.node.pk).exists())
         self.assertFalse(default_storage.exists(file_name))
+
+
+@override_settings(ALLOWED_HOSTS=["testserver", "localhost"])
+class FileBulkApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="bulk-api@example.com",
+            password="password",
+            is_active=True,
+            email_verified=True,
+        )
+        self.client.force_login(self.user)
+        self.folder = Node.objects.create(owner=self.user, name="folder", ext="", node_type=NodeType.FOLDER)
+        self.target = Node.objects.create(owner=self.user, name="target", ext="", node_type=NodeType.FOLDER)
+        self.file_node = Node.objects.create(
+            owner=self.user,
+            name="doc.txt",
+            ext=".txt",
+            node_type=NodeType.FILE,
+            parent=self.folder,
+        )
+
+    def post_json(self, url, payload):
+        return self.client.post(
+            url,
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def create_file_with_blob(self, name):
+        node = Node.objects.create(
+            owner=self.user,
+            name=name,
+            ext=".txt",
+            node_type=NodeType.FILE,
+            parent=self.folder,
+        )
+        with patch("document_ai.signals.parse_document_with_docling.delay"):
+            FileBlob.objects.create(
+                node=node,
+                original_name=name,
+                file=SimpleUploadedFile(name, b"hello", content_type="text/plain"),
+                mime_type="text/plain",
+                size=5,
+                status="ready",
+            )
+        return node
+
+    def test_bulk_delete_moves_selected_nodes_to_trash(self):
+        response = self.post_json("/files/api/v1/bulk/delete/", {"uids": [str(self.file_node.uid)]})
+
+        self.assertEqual(response.status_code, 200)
+        self.file_node.refresh_from_db()
+        self.assertTrue(self.file_node.trashed)
+
+    def test_bulk_restore_restores_selected_nodes(self):
+        file_service.move_to_trash(self.file_node)
+
+        response = self.post_json("/files/api/v1/bulk/restore/", {"uids": [str(self.file_node.uid)]})
+
+        self.assertEqual(response.status_code, 200)
+        self.file_node.refresh_from_db()
+        self.assertFalse(self.file_node.trashed)
+
+    def test_bulk_move_moves_selected_nodes(self):
+        response = self.post_json(
+            "/files/api/v1/bulk/move/",
+            {"uids": [str(self.file_node.uid)], "parent_id": str(self.target.uid)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.file_node.refresh_from_db()
+        self.assertEqual(self.file_node.parent_id, self.target.id)
+
+    def test_ai_readiness_summarizes_searchable_and_incomplete_files(self):
+        ready_node = self.create_file_with_blob("ready.txt")
+        ready_parse = DocumentParseResult.objects.create(
+            node=ready_node,
+            status=AIStatus.COMPLETED,
+            chunk_count=2,
+        )
+        DocumentChunk.objects.create(
+            parse_result=ready_parse,
+            chunk_index=0,
+            text="ready one",
+            status=AIStatus.COMPLETED,
+        )
+        DocumentChunk.objects.create(
+            parse_result=ready_parse,
+            chunk_index=1,
+            text="ready two",
+            status=AIStatus.COMPLETED,
+        )
+
+        processing_node = self.create_file_with_blob("processing.txt")
+        DocumentParseResult.objects.create(
+            node=processing_node,
+            status=AIStatus.PROCESSING,
+            chunk_count=0,
+        )
+
+        failed_node = self.create_file_with_blob("failed.txt")
+        DocumentParseResult.objects.create(
+            node=failed_node,
+            status=AIStatus.FAILED,
+            chunk_count=0,
+        )
+
+        self.create_file_with_blob("queued.txt")
+
+        response = self.client.get("/files/api/v1/ai/readiness/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["total_files"], 4)
+        self.assertEqual(payload["searchable_files"], 1)
+        self.assertEqual(payload["ready_percent"], 25.0)
+        self.assertEqual(payload["parse"]["completed"], 1)
+        self.assertEqual(payload["parse"]["processing"], 1)
+        self.assertEqual(payload["parse"]["failed"], 1)
+        self.assertEqual(payload["parse"]["pending"], 1)
+        self.assertEqual(payload["embedding"]["completed"], 1)
+
+    def test_rag_scope_nodes_returns_files_and_folders(self):
+        file_node = self.create_file_with_blob("scope-doc.txt")
+        folder = Node.objects.create(
+            owner=self.user,
+            name="scope-folder",
+            ext="",
+            node_type=NodeType.FOLDER,
+            parent=self.folder,
+        )
+        child_file = self.create_file_with_blob("scope-child.txt")
+        child_file.move(new_parent=folder)
+
+        response = self.client.get("/files/api/v1/rag/scope-nodes/?q=scope")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        returned = {item["uid"]: item for item in payload["nodes"]}
+        self.assertIn(str(file_node.uid), returned)
+        self.assertIn(str(folder.uid), returned)
+        self.assertIn(str(child_file.uid), returned)
+        self.assertEqual(returned[str(folder.uid)]["node_type"], NodeType.FOLDER)
+        self.assertEqual(returned[str(folder.uid)]["file_count"], 1)
+        self.assertEqual(returned[str(folder.uid)]["depth"], 1)
+        self.assertNotIn("ai_ready", returned[str(folder.uid)])
+        returned_uids = [item["uid"] for item in payload["nodes"]]
+        self.assertLess(returned_uids.index(str(folder.uid)), returned_uids.index(str(child_file.uid)))
+
+    @patch("files.api_v1.file_views.parse_document_with_docling.delay")
+    def test_retry_ai_processing_requeues_failed_parse(self, delay_mock):
+        DocumentParseResult.objects.create(
+            node=self.file_node,
+            status=AIStatus.FAILED,
+            errors=[{"message": "parse failed"}],
+        )
+
+        response = self.post_json(f"/files/api/v1/{self.file_node.uid}/ai/retry/", {})
+
+        self.assertEqual(response.status_code, 200)
+        delay_mock.assert_called_once_with(self.file_node.id)
+        self.file_node.parse_result.refresh_from_db()
+        self.assertEqual(self.file_node.parse_result.status, AIStatus.PENDING)
+
+    @patch("files.api_v1.file_views.enqueue_embedding_tasks.delay")
+    def test_retry_ai_processing_requeues_failed_embedding(self, delay_mock):
+        parse_result = DocumentParseResult.objects.create(
+            node=self.file_node,
+            status=AIStatus.COMPLETED,
+            chunk_count=1,
+        )
+        chunk = DocumentChunk.objects.create(
+            parse_result=parse_result,
+            chunk_index=0,
+            text="failed chunk",
+            status=AIStatus.FAILED,
+            error_message={"message": "embedding failed"},
+        )
+
+        response = self.post_json(f"/files/api/v1/{self.file_node.uid}/ai/retry/", {})
+
+        self.assertEqual(response.status_code, 200)
+        delay_mock.assert_called_once_with(self.file_node.id)
+        chunk.refresh_from_db()
+        self.assertEqual(chunk.status, AIStatus.PENDING)
+        self.assertEqual(chunk.error_message, {})

@@ -102,6 +102,29 @@ services:
         condition: service_started
     command: [ "bash", "-lc", "celery -A config worker -l info -Q search --concurrency=$${SEARCH_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
+  celery-query-worker:
+    build:
+      context: ./app
+      args:
+        INSTALL_AI_DEPS: "0"
+        INSTALL_DEV_DEPS: "1"
+    container_name: celery-query-worker-dev
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    volumes:
+      - ./app:/app
+      - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      llm-parser:
+        condition: service_started
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q query --concurrency=$${QUERY_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+
   celery-text2sql-worker:
     build:
       context: ./app
@@ -124,6 +147,29 @@ services:
       llm-parser:
         condition: service_started
     command: [ "bash", "-lc", "celery -A config worker -l info -Q text2sql --concurrency=$${TEXT2SQL_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+
+  celery-llm-rag-worker:
+    build:
+      context: ./app
+      args:
+        INSTALL_AI_DEPS: "0"
+        INSTALL_DEV_DEPS: "1"
+    container_name: celery-llm-rag-worker-dev
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    volumes:
+      - ./app:/app
+      - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      llm-parser:
+        condition: service_started
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q rag --concurrency=$${RAG_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
   celery-beat:
     build:
@@ -172,7 +218,7 @@ services:
     volumes:
       - ./llama-cpp-parser/data/cache:/root/.cache
     command: >
-      --hf-repo ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --threads 8 --ctx-size 4096 --parallel 1 --metrics
+      --hf-repo ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 --threads 8 --ctx-size 4096 --parallel 2 --metrics --reasoning auto --reasoning-budget 64
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 10s

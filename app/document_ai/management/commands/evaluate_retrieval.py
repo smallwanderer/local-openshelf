@@ -7,7 +7,11 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from config.enums import AIStatus
-from document_ai.embedding.embeding_models import bge_m3_embedder, EmbeddingResult
+from document_ai.embedding.embeding_models import (
+    EmbeddingResult,
+    embed_document,
+    embed_query,
+)
 from document_ai.models import DocumentChunk
 from document_ai.parsers.config import get_embedding_backend, get_embedding_model
 
@@ -156,7 +160,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.MIGRATE_HEADING(f"[backend={backend}]"))
 
             chunk_embeddings = [
-                bge_m3_embedder(
+                embed_document(
                     text=record["text"],
                     model_name=model_name,
                     backend=backend,
@@ -170,8 +174,8 @@ class Command(BaseCommand):
 
             for item in dataset:
                 expected_ids = {str(node_id) for node_id in item["expected_node_ids"]}
-                query_embedding = bge_m3_embedder(
-                    text=item["query"],
+                query_embedding = embed_query(
+                    query=item["query"],
                     model_name=model_name,
                     backend=backend,
                 )

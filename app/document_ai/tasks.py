@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 import json
 import os
+import re
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING
-from datetime import timedelta
+from uuid import UUID
 
 from celery import shared_task
 from django.utils import timezone
@@ -26,6 +29,65 @@ if TYPE_CHECKING:
     from document_ai.parsers.docling_parser import ParseResult
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(value):
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return value
+
+
+def _get_llm_message_content(payload: dict) -> str:
+    choice = (payload.get("choices") or [{}])[0]
+    message_content = choice.get("message", {}).get("content", "")
+    if isinstance(message_content, list):
+        return "".join(
+            str(item.get("text", "")) if isinstance(item, dict) else str(item)
+            for item in message_content
+        ).strip()
+    return str(message_content or choice.get("text", "") or "").strip()
+
+
+def _strip_llm_control_tokens(text: str) -> str:
+    cleaned = re.sub(r"<\|[^>]+?\|>", "", text or "").strip()
+    cleaned = re.sub(r"^```(?:[a-zA-Z]+)?\s*|\s*```$", "", cleaned).strip()
+    return cleaned
+
+
+def _extract_llm_final_content(text: str, *, fallback_to_raw: bool = True) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    final_markers = [
+        "<|channel>final",
+        "<channel|>",
+        "<|final|>",
+        "Final Output:",
+        "Final Output",
+        "최종 답변:",
+        "답변:",
+    ]
+    for marker in final_markers:
+        if marker in raw:
+            return _strip_llm_control_tokens(raw.split(marker, 1)[1])
+
+    if "<|channel>thought" in raw or "<|think" in raw or "<think>" in raw:
+        return ""
+
+    if not fallback_to_raw:
+        return ""
+    raw = re.sub(r"<\|channel\>thought[\s\S]*?(?=<\|channel\>final|$)", "", raw).strip()
+    raw = re.sub(r"<think>[\s\S]*?(?=</think>|$)", "", raw).strip()
+    return _strip_llm_control_tokens(raw)
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -568,9 +630,9 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
             embedding_backend,
         )
 
-        from document_ai.embedding.embeding_models import bge_m3_embedder
+        from document_ai.embedding.embeding_models import embed_document
 
-        embedding = bge_m3_embedder(
+        embedding = embed_document(
             text=text,
             model_name=embedding_model,
             backend=embedding_backend,
@@ -862,7 +924,18 @@ def generate_text2sql_response(self, prompt: str) -> dict:
             timeout=(5, request_timeout),
         )
         res.raise_for_status()
-        return res.json()
+        response_payload = res.json()
+        raw_content = _get_llm_message_content(response_payload)
+        final_content = _extract_llm_final_content(raw_content, fallback_to_raw=True)
+        if not final_content:
+            return {
+                "status": "error",
+                "message": "Text2SQL LLM returned empty final content.",
+                "raw_preview": raw_content[:1000],
+            }
+        if response_payload.get("choices"):
+            response_payload["choices"][0].setdefault("message", {})["content"] = final_content
+        return response_payload
     except requests.Timeout as e:
         logger.error("Text2SQL LLM timeout after %ss: %s", request_timeout, e)
         return {
@@ -872,5 +945,613 @@ def generate_text2sql_response(self, prompt: str) -> dict:
     except Exception as e:
         logger.error(f"Text2SQL LLM Error: {e}")
         return {"status": "error", "message": str(e)}
+    finally:
+        semaphore.release()
+
+
+def _build_rag_context(
+    results: list,
+    *,
+    evidence_limit: int = 3,
+    context_max_chars: int = 3000,
+    evidence_text_max_chars: int = 500,
+) -> tuple[str, list[dict]]:
+    context_blocks = []
+    citations = []
+    citation_id = 1
+    used_chars = 0
+
+    for result in results or []:
+        node_name = result.get("node_name", "")
+        node_id = result.get("node_id")
+        doc_score = result.get("doc_score")
+        for evidence in result.get("evidences", []) or []:
+            if citation_id > evidence_limit:
+                return "\n\n".join(context_blocks), citations
+
+            text = evidence.get("compressed_text") or evidence.get("context_text") or evidence.get("text") or ""
+            text = str(text).strip()
+            if not text:
+                continue
+            remaining_chars = context_max_chars - used_chars
+            if remaining_chars <= 0:
+                return "\n\n".join(context_blocks), citations
+
+            text_limit = max(100, min(evidence_text_max_chars, remaining_chars))
+            clipped_text = text[:text_limit]
+            citation = {
+                "id": citation_id,
+                "node_id": str(node_id) if node_id is not None else "",
+                "node_name": node_name,
+                "chunk_id": evidence.get("chunk_id"),
+                "section": evidence.get("section") or "",
+                "pages": evidence.get("pages") or "",
+                "doc_score": doc_score,
+                "hybrid_score": evidence.get("hybrid_score"),
+                "dense_score": evidence.get("dense_score"),
+                "sparse_score": evidence.get("sparse_score"),
+                "text": clipped_text,
+            }
+            block = "\n".join(
+                [
+                    f"[{citation_id}] {node_name}",
+                    f"section: {citation['section'] or 'N/A'}",
+                    f"pages: {citation['pages'] or 'N/A'}",
+                    f"text: {citation['text']}",
+                ]
+            )
+            if used_chars + len(block) > context_max_chars and citations:
+                return "\n\n".join(context_blocks), citations
+
+            citations.append(citation)
+            context_blocks.append(block)
+            used_chars += len(block) + 2
+            citation_id += 1
+
+    return "\n\n".join(context_blocks), citations
+
+
+def _normalize_rag_answer(raw_answer: str) -> str:
+    answer = _extract_llm_final_content(raw_answer, fallback_to_raw=True)
+    if not answer:
+        return ""
+
+    answer = re.sub(r"<\|channel\>thought[\s\S]*?(?=<\|channel\>final|$)", "", answer).strip()
+    answer = re.sub(r"<\|[^>]+?\|>", "", answer).strip()
+    answer = re.sub(r"^```(?:[a-zA-Z]+)?\s*|\s*```$", "", answer).strip()
+    return answer
+
+
+def _clean_rag_evidence_text(text: str, *, limit: int = 220) -> str:
+    cleaned = re.sub(r"<!--.*?-->", " ", str(text or ""), flags=re.DOTALL)
+    cleaned = re.sub(r"\|[-:\s|]+\|", " ", cleaned)
+    cleaned = re.sub(r"[|#*_`]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit].rstrip() + "..."
+    return cleaned
+
+
+def _answer_claims_insufficient(answer: str) -> bool:
+    candidate = (answer or "").strip()
+    for separator in ["주요 근거", "Key Evidence", "근거 부족", "Limitations"]:
+        if separator in candidate:
+            candidate = candidate.split(separator, 1)[0]
+            break
+    lowered = candidate[:500].lower()
+    markers = [
+        "근거가 부족해 답변할 수 없습니다",
+        "근거가 부족하여 답변할 수 없습니다",
+        "답변할 수 없습니다",
+        "확인할 수 없습니다",
+        "not enough evidence",
+        "insufficient evidence",
+        "cannot determine",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
+def _fallback_rag_answer(citations: list[dict], language: str) -> str:
+    if not citations:
+        return "근거가 부족해 답변할 수 없습니다." if language == "ko" else "There is not enough evidence to answer."
+
+    selected = citations[:3]
+
+    if language == "ko":
+        lines = ["핵심 답변"]
+        for citation in selected[:2]:
+            text = _clean_rag_evidence_text(citation.get("text"), limit=230)
+            if text:
+                lines.append(f"- {text} [{citation.get('id')}]")
+
+        lines.append("")
+        lines.append("주요 근거")
+        for citation in selected:
+            section = citation.get("section") or "N/A"
+            pages = citation.get("pages") or "N/A"
+            node_name = citation.get("node_name") or "문서"
+            lines.append(f"- {node_name} / section {section} / page {pages} [{citation.get('id')}]")
+
+        lines.append("")
+        lines.append("근거 부족")
+        lines.append("- 위 근거 밖의 세부 사항은 확인하지 않았습니다.")
+        return "\n".join(lines)
+
+    lines = ["Answer"]
+    for citation in selected[:2]:
+        text = _clean_rag_evidence_text(citation.get("text"), limit=230)
+        if text:
+            lines.append(f"- {text} [{citation.get('id')}]")
+
+    lines.append("")
+    lines.append("Key Evidence")
+    for citation in selected:
+        section = citation.get("section") or "N/A"
+        pages = citation.get("pages") or "N/A"
+        node_name = citation.get("node_name") or "Document"
+        lines.append(f"- {node_name} / section {section} / page {pages} [{citation.get('id')}]")
+
+    lines.append("")
+    lines.append("Limitations")
+    lines.append("- Details outside the cited evidence were not verified.")
+    return "\n".join(lines)
+
+
+def _summarize_structured_filters(filters: list[dict]) -> list[str]:
+    summaries = []
+    for item in filters:
+        scope = item.get("scope") or "node"
+        field = item.get("field")
+        operator = item.get("operator")
+        value = item.get("value")
+        if not field or not operator:
+            continue
+        summaries.append(f"{scope}.{field} {operator} {value}")
+    return summaries
+
+
+def _build_refined_query_prompt(*, mode: str, question: dict, metadata: dict) -> str:
+    dense_query = (question.get("dense") or question.get("residual") or question.get("normalized") or "").strip()
+    if not dense_query:
+        return ""
+
+    filter_summaries = _summarize_structured_filters(metadata.get("filters") or [])
+    scope_text = ", ".join(metadata.get("target_scopes") or [])
+    prompt_lines = [dense_query]
+
+    if filter_summaries:
+        prompt_lines.append("메타데이터 조건: " + "; ".join(filter_summaries))
+    if scope_text:
+        prompt_lines.append("대상 범위: " + scope_text)
+
+    if mode == "rag":
+        prompt_lines.append(
+            "검색된 문서 근거만 사용해 한국어로 답변하고, 확인되지 않은 내용은 근거 부족으로 분리하세요."
+        )
+    else:
+        prompt_lines.append("메타데이터 조건을 먼저 적용한 뒤 남은 의미 질의로 관련 문서를 검색하세요.")
+
+    return "\n".join(prompt_lines)
+
+
+def _fallback_query_parse(query: str, mode: str, error: Exception | None = None) -> dict:
+    from search_engine.query_engine import QueryPipeline
+
+    payload = QueryPipeline(enabled=True).passthrough(query, mode, source="fallback")
+    if error is not None:
+        payload["status"] = "fallback"
+        payload["analysis"]["warnings"].append(
+            {
+                "code": "query_llm_failed",
+                "message": str(error),
+            }
+        )
+    return payload
+
+
+def _query_dsl_schema_for_prompt() -> dict:
+    from search_engine.query_engine.schema import QUERY_DSL_SCHEMA
+
+    return _json_safe(QUERY_DSL_SCHEMA)
+
+
+def _passthrough_query_parse(query: str, mode: str, *, source: str, warning: dict | None = None) -> dict:
+    from search_engine.query_engine import QueryPipeline
+
+    return QueryPipeline(enabled=True).passthrough(query, mode, source=source, warning=warning)
+
+
+def _extract_json_object(text: str) -> dict:
+    candidate = _extract_llm_final_content(text, fallback_to_raw=True)
+    if not candidate:
+        raise ValueError("LLM returned empty content.")
+
+    candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate).strip()
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        payload = json.loads(candidate[start : end + 1])
+
+    if not isinstance(payload, dict):
+        raise ValueError("LLM query parser output must be a JSON object.")
+    return payload
+
+
+def _parse_user_query_with_llm(query: str, mode: str) -> dict:
+    import requests
+    from redis import Redis
+    from redis_semaphore import NotAvailable, Semaphore
+    from search_engine.query_engine import QueryPipeline
+
+    llm_base_url = os.getenv("QUERY_LLM_URL", os.getenv("RAG_LLM_URL", os.getenv("TEXT2SQL_LLM_URL", "http://llm-parser:8080"))).rstrip("/")
+    model = os.getenv("QUERY_LLM_MODEL", os.getenv("RAG_LLM_MODEL", "google/gemma-4-E4B-it"))
+    redis_url = os.getenv("QUERY_REDIS_URL", os.getenv("TEXT2SQL_REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")))
+    semaphore_count = _get_positive_int_env("QUERY_SEMAPHORE_COUNT", _get_positive_int_env("TEXT2SQL_SEMAPHORE_COUNT", 1))
+    semaphore_timeout = _get_positive_int_env("QUERY_SEMAPHORE_TIMEOUT", _get_positive_int_env("TEXT2SQL_SEMAPHORE_TIMEOUT", 5))
+    request_timeout = _get_positive_int_env("QUERY_REQUEST_TIMEOUT", 300)
+    max_tokens = _get_positive_int_env("QUERY_MAX_TOKENS", 1024)
+    stale_lock_timeout = max(request_timeout + 60, 300)
+    semaphore_namespace = os.getenv(
+        "QUERY_SEMAPHORE_NAMESPACE",
+        os.getenv("TEXT2SQL_SEMAPHORE_NAMESPACE", "llm_text2sql_v2"),
+    )
+    pipeline_enabled = os.getenv("QUERY_PIPELINE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    max_validation_passes = _get_positive_int_env("QUERY_PIPELINE_MAX_VALIDATION_PASSES", 2)
+    query_pipeline = QueryPipeline(
+        enabled=pipeline_enabled,
+        max_validation_passes=max_validation_passes,
+    )
+
+    system_prompt = (
+        "You convert Korean or English natural-language document search queries into a limited QueryDSL candidate. "
+        "Return only compact JSON. No markdown, no explanations, no SQL, no Django ORM code, no extra text. "
+        'Shape: {"semantic_query":"","filters":[],"sorts":[],"target_scopes":[]}. '
+        "Each filter shape is {scope,field,operator,value,source_text,confidence}. "
+        "Each sort shape is {scope,field,direction,source_text}. "
+        "Use only the provided schema scopes, fields, and operators. "
+        "Correct obvious typos in user language, but do not invent metadata filters. "
+        "Do not create filters for trash/deleted state, upload completion, parse completion, or embedding completion. "
+        "Those operational states are outside the searchable QueryDSL surface. "
+        "If a condition is ambiguous, omit the filter and preserve the meaning in semantic_query."
+    )
+    today = timezone.localdate()
+    tz = timezone.get_current_timezone()
+    last_7_start = timezone.make_aware(datetime.combine(today - timedelta(days=7), time.min), tz).isoformat()
+    last_7_end = timezone.make_aware(datetime.combine(today, time.min), tz).isoformat()
+
+    user_prompt = json.dumps(
+        {
+            "today": timezone.localdate().isoformat(),
+            "timezone": str(tz),
+            "relative_date_rules": {
+                "지난주": f"Use last 7 days: created_at >= {last_7_start} and created_at < {last_7_end}.",
+                "last week": f"Use last 7 days: created_at >= {last_7_start} and created_at < {last_7_end}.",
+            },
+            "mode": mode,
+            "query": query,
+            "query_dsl_schema": _query_dsl_schema_for_prompt(),
+            "examples": [
+                {
+                    "query": "지난주 업로드한 pdf 계약 문서 찾아줘",
+                    "output": {
+                        "semantic_query": "계약 문서",
+                        "filters": [
+                            {"scope": "node", "field": "node_type", "operator": "eq", "value": "file", "source_text": "문서", "confidence": 0.95},
+                            {"scope": "node", "field": "ext", "operator": "eq", "value": "pdf", "source_text": "pdf", "confidence": 1.0},
+                            {"scope": "node", "field": "created_at", "operator": "gte", "value": last_7_start, "source_text": "지난주 업로드", "confidence": 0.9},
+                            {"scope": "node", "field": "created_at", "operator": "lt", "value": last_7_end, "source_text": "지난주 업로드", "confidence": 0.9},
+                        ],
+                        "sorts": [
+                            {"scope": "node", "field": "created_at", "direction": "desc", "source_text": "최근 업로드"}
+                        ],
+                        "target_scopes": ["node"],
+                    },
+                },
+                {
+                    "query": "할인지원 농식품 보도자료",
+                    "output": {
+                        "semantic_query": "할인지원 농식품 보도자료",
+                        "filters": [],
+                        "sorts": [],
+                        "target_scopes": ["node"],
+                    },
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    redis_client = Redis.from_url(redis_url)
+    semaphore = Semaphore(
+        redis_client,
+        count=semaphore_count,
+        namespace=semaphore_namespace,
+        stale_client_timeout=stale_lock_timeout,
+    )
+
+    try:
+        semaphore.acquire(timeout=semaphore_timeout)
+    except NotAvailable as exc:
+        raise RuntimeError("Query LLM parser is busy. Please retry shortly.") from exc
+
+    try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": float(os.getenv("QUERY_TEMPERATURE", "0.0")),
+            "top_p": float(os.getenv("QUERY_TOP_P", "1.0")),
+            "max_tokens": max_tokens,
+            "stream": False,
+            "reasoning_format": os.getenv("QUERY_REASONING_FORMAT", "none"),
+            "response_format": {"type": "json_object"},
+        }
+        response = requests.post(
+            f"{llm_base_url}/v1/chat/completions",
+            json=payload,
+            timeout=(5, request_timeout),
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            raise RuntimeError(f"Query LLM HTTP {response.status_code}: {response.text[:1000]}") from exc
+
+        response_payload = response.json()
+        raw_content = _get_llm_message_content(response_payload)
+        final_content = _extract_llm_final_content(raw_content, fallback_to_raw=True)
+        if not final_content:
+            return _passthrough_query_parse(
+                query,
+                mode,
+                source="llm_empty_final",
+                warning={
+                    "code": "query_llm_empty_final",
+                    "message": "Query LLM returned no final content. Original query was used as semantic query.",
+                },
+            )
+        try:
+            raw_dsl_payload = _extract_json_object(final_content)
+        except Exception as exc:
+            raise RuntimeError(f"Query LLM returned invalid JSON: {raw_content[:1000]!r}") from exc
+
+        result = query_pipeline.run(query, mode, raw_dsl_payload)
+        result["debug"].update(
+            {
+                "llm_model": model,
+                "llm_url": llm_base_url,
+            }
+        )
+        return result
+    finally:
+        semaphore.release()
+
+
+@shared_task(queue="query")
+def parse_user_query(query: str, mode: str = "search") -> dict:
+    """
+    사용자 질의를 LLM 기반 QueryDSL 후보로 파싱하고 query_engine에서 검증/ORM 컴파일합니다.
+    규칙 기반 QueryAnalyzer는 사용하지 않으며, 실패 시 원 질의를 semantic query로 보존합니다.
+    """
+    normalized_query = normalize_extracted_text(query or "").strip()
+    if not normalized_query:
+        return _fallback_query_parse(query, mode)
+
+    llm_enabled = os.getenv("QUERY_LLM_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    if not llm_enabled:
+        return _passthrough_query_parse(
+            normalized_query,
+            mode,
+            source="llm_disabled",
+            warning={
+                "code": "query_llm_disabled",
+                "message": "QUERY_LLM_ENABLED is disabled. Original query was used as semantic query.",
+            },
+        )
+
+    try:
+        return _parse_user_query_with_llm(normalized_query, mode)
+    except Exception as exc:
+        logger.warning("Query LLM parser failed; preserving original query: %s", exc)
+        return _fallback_query_parse(query, mode, error=exc)
+
+
+@shared_task(queue="rag", bind=True, soft_time_limit=330, time_limit=360)
+def generate_rag_response(self, rag_job_id: int) -> dict:
+    """
+    RAG 답변 생성 태스크.
+    검색은 search worker가 완료한 SearchJob 결과를 사용하고, LLM 호출은 text2sql worker와
+    동일한 llm-parser 엔드포인트/세마포어 정책을 공유하되, celery rag 큐에서 실행합니다.
+    """
+    import requests
+    from redis import Redis
+    from redis_semaphore import NotAvailable, Semaphore
+
+    from document_ai.models import RAGJob
+
+    try:
+        rag_job = RAGJob.objects.select_related("search_job").get(pk=rag_job_id)
+    except RAGJob.DoesNotExist:
+        logger.error("RAG job %s not found", rag_job_id)
+        return {"status": "failed", "job_id": rag_job_id, "error": f"RAG job {rag_job_id} not found"}
+
+    if not rag_job.search_job or rag_job.search_job.status != AIStatus.COMPLETED:
+        rag_job.status = AIStatus.FAILED
+        rag_job.completed_at = timezone.now()
+        rag_job.error_message = "Search job is not completed."
+        rag_job.save(update_fields=["status", "completed_at", "error_message"])
+        return {"status": "failed", "job_id": rag_job_id, "error": rag_job.error_message}
+
+    rag_job.status = AIStatus.PROCESSING
+    rag_job.started_at = timezone.now()
+    rag_job.error_message = ""
+    rag_job.save(update_fields=["status", "started_at", "error_message"])
+
+    llm_base_url = os.getenv("RAG_LLM_URL", os.getenv("TEXT2SQL_LLM_URL", "http://llm-parser:8080")).rstrip("/")
+    redis_url = os.getenv("RAG_REDIS_URL", os.getenv("TEXT2SQL_REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")))
+    semaphore_count = _get_positive_int_env("RAG_SEMAPHORE_COUNT", _get_positive_int_env("TEXT2SQL_SEMAPHORE_COUNT", 1))
+    semaphore_timeout = _get_positive_int_env("RAG_SEMAPHORE_TIMEOUT", _get_positive_int_env("TEXT2SQL_SEMAPHORE_TIMEOUT", 5))
+    request_timeout = _get_positive_int_env("RAG_REQUEST_TIMEOUT", _get_positive_int_env("TEXT2SQL_REQUEST_TIMEOUT", 300))
+    max_tokens = _get_positive_int_env("RAG_MAX_TOKENS", 512)
+    evidence_limit = _get_positive_int_env("RAG_EVIDENCE_LIMIT", 5)
+    context_max_chars = _get_positive_int_env("RAG_CONTEXT_MAX_CHARS", 3000)
+    evidence_text_max_chars = _get_positive_int_env("RAG_EVIDENCE_TEXT_MAX_CHARS", 500)
+    stale_lock_timeout = max(request_timeout + 60, 300)
+    semaphore_namespace = os.getenv(
+        "RAG_SEMAPHORE_NAMESPACE",
+        os.getenv("TEXT2SQL_SEMAPHORE_NAMESPACE", "llm_text2sql_v2"),
+    )
+
+    context_text, citations = _build_rag_context(
+        rag_job.search_job.results,
+        evidence_limit=evidence_limit,
+        context_max_chars=context_max_chars,
+        evidence_text_max_chars=evidence_text_max_chars,
+    )
+    if not citations:
+        rag_job.status = AIStatus.FAILED
+        rag_job.completed_at = timezone.now()
+        rag_job.error_message = "No evidence was found for the question."
+        rag_job.citations = []
+        rag_job.save(update_fields=["status", "completed_at", "error_message", "citations"])
+        return {"status": "failed", "job_id": rag_job_id, "error": rag_job.error_message}
+
+    language_instruction = "Answer in Korean" if rag_job.language == "ko" else "Answer in English."
+    system_prompt = (
+        "You are an assistant for question-answering based on provided evidence. "
+        "Use the following pieces of retrieved context to answer the question."
+        "If any evidence is present, do not assume insufficient evidence; answer only what is confirmed in the evidence. "
+        "Only state that the evidence is insufficient if the information required for the question is entirely absent from the evidence. "
+        "Append citation numbers like [1], [2] at the end of each key sentence. "
+        "Absolutely do not output reasoning processes, analysis processes, thoughts, channels, or step-by-step thinking. "
+        "Synthesize a clear, natural-sounding final answer without repeating or explicitly listing the evidence. Do not use structural headings unless necessary. "
+        "Do not create code blocks; output only the final answer text. "
+        f"{language_instruction}"
+    )
+    user_prompt = (
+        f"Question:\n{rag_job.question}\n\n"
+        f"Evidence:\n{context_text}\n\n"
+        "Answer strictly based on the evidence provided."
+    )
+    if rag_job.language == "ko":
+        fewshot_user = (
+            "Question:\n주요 지원 대책은 무엇인가요?\n\n"
+            "Evidence:\n[1] 문서 A\nsection: 정책\npages: 1\n"
+            "text: 정부는 공급 확대와 할인 지원을 병행해 가격 부담을 낮춘다.\n\n"
+            "Answer concisely but sufficiently based on the evidence provided."
+        )
+        fewshot_assistant = (
+            "주요 지원 대책은 공급 확대와 할인 지원을 병행하는 것입니다 [1]."
+        )
+    else:
+        fewshot_user = (
+            "Question:\nWhat are the main support measures?\n\n"
+            "Evidence:\n[1] Document A\nsection: Policy\npages: 1\n"
+            "text: The government will expand supply and provide discount support to reduce price pressure.\n\n"
+            "Answer using only the evidence above."
+        )
+        fewshot_assistant = (
+            "The main support measures include supply expansion and discount support [1]."
+        )
+
+    redis_client = Redis.from_url(redis_url)
+    semaphore = Semaphore(
+        redis_client,
+        count=semaphore_count,
+        namespace=semaphore_namespace,
+        stale_client_timeout=stale_lock_timeout,
+    )
+
+    try:
+        semaphore.acquire(timeout=semaphore_timeout)
+    except NotAvailable:
+        rag_job.status = AIStatus.PENDING
+        rag_job.task_id = ""
+        rag_job.error_message = "RAG worker is busy. Please retry shortly."
+        rag_job.save(update_fields=["status", "task_id", "error_message"])
+        return {"status": "busy", "job_id": rag_job_id, "message": rag_job.error_message}
+
+    try:
+        payload = {
+            "model": os.getenv("RAG_LLM_MODEL", "google/gemma-4-E4B-it"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": fewshot_user},
+                {"role": "assistant", "content": fewshot_assistant},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": float(os.getenv("RAG_TEMPERATURE", "0.2")),
+            "top_p": float(os.getenv("RAG_TOP_P", "0.9")),
+            "max_tokens": max_tokens,
+            "stream": False,
+            "reasoning_format": "none",
+        }
+        response = requests.post(
+            f"{llm_base_url}/v1/chat/completions",
+            json=payload,
+            timeout=(5, request_timeout),
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            response_text = response.text[:2000]
+            raise RuntimeError(
+                f"RAG LLM HTTP {response.status_code}: {response_text}"
+            ) from exc
+        payload = response.json()
+        raw_answer = (
+            payload.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        answer = _normalize_rag_answer(raw_answer)
+        if not answer:
+            logger.warning(
+                "RAG answer normalization returned empty output: job_id=%s raw_preview=%r",
+                rag_job.id,
+                raw_answer[:500],
+            )
+            answer = _fallback_rag_answer(citations, rag_job.language)
+            rag_job.error_message = f"LLM returned no final answer after normalization. raw_preview={raw_answer[:1000]}"
+        elif citations and _answer_claims_insufficient(answer):
+            logger.warning(
+                "RAG answer incorrectly claimed insufficient evidence: job_id=%s citation_count=%s raw_preview=%r",
+                rag_job.id,
+                len(citations),
+                raw_answer[:500],
+            )
+            answer = _fallback_rag_answer(citations, rag_job.language)
+            rag_job.error_message = f"LLM claimed insufficient evidence despite citations. raw_preview={raw_answer[:1000]}"
+        else:
+            rag_job.error_message = ""
+
+        rag_job.answer = answer
+        rag_job.citations = citations
+        rag_job.status = AIStatus.COMPLETED
+        rag_job.completed_at = timezone.now()
+        rag_job.save(update_fields=["answer", "citations", "status", "completed_at", "error_message"])
+
+        return {"status": "success", "job_id": rag_job_id, "citation_count": len(citations)}
+    except requests.Timeout as exc:
+        rag_job.status = AIStatus.FAILED
+        rag_job.completed_at = timezone.now()
+        rag_job.error_message = f"RAG request timed out after {request_timeout}s"
+        rag_job.save(update_fields=["status", "completed_at", "error_message"])
+        logger.error("RAG LLM timeout after %ss: %s", request_timeout, exc)
+        return {"status": "failed", "job_id": rag_job_id, "error": rag_job.error_message}
+    except Exception as exc:
+        rag_job.status = AIStatus.FAILED
+        rag_job.completed_at = timezone.now()
+        rag_job.error_message = str(exc)
+        rag_job.save(update_fields=["status", "completed_at", "error_message"])
+        logger.exception("RAG LLM error: job_id=%s", rag_job_id)
+        return {"status": "failed", "job_id": rag_job_id, "error": str(exc)}
     finally:
         semaphore.release()

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko">
+<script>if(localStorage.getItem('openshelf-theme')==='dark')document.documentElement.classList.add('dark');</script>
 
 <head>
     <meta charset="UTF-8">
@@ -37,6 +38,22 @@
             --radius-lg: 14px;
             --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
             --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        /* Dark Mode */
+        html.dark {
+            --bg: #111113;
+            --surface: #1C1C1E;
+            --border: #2C2C2E;
+            --text: #E5E5E7;
+            --muted: #8E8E93;
+            --accent: #3B82F6;
+            --accent-bg: rgba(59, 130, 246, 0.15);
+            --danger: #EF4444;
+            --success: #22C55E;
+            --warn: #F59E0B;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+            --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         }
 
         body {
@@ -250,6 +267,107 @@
             box-shadow: var(--shadow-sm);
         }
 
+        /* ── 글로벌 검색 바 ── */
+        .global-search {
+            flex: 1;
+            max-width: 420px;
+            position: relative;
+        }
+        .global-search input {
+            width: 100%;
+            padding: 7px 12px 7px 34px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            font-family: var(--font);
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .global-search input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+        }
+        .global-search input::placeholder { color: var(--muted); }
+        .global-search-icon {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 15px;
+            height: 15px;
+            color: var(--muted);
+            pointer-events: none;
+        }
+        .global-search-icon svg {
+            width: 15px; height: 15px;
+            stroke: currentColor; fill: none;
+            stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+        }
+        .search-results-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            margin-top: 6px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            max-height: 360px;
+            overflow-y: auto;
+            z-index: 200;
+        }
+        .search-results-dropdown.open { display: block; }
+        .search-result-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            text-decoration: none;
+            color: var(--text);
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.1s;
+        }
+        .search-result-item:last-child { border-bottom: none; }
+        .search-result-item:hover { background: var(--bg); }
+        .search-result-name { font-weight: 500; }
+        .search-result-meta { font-size: 11px; color: var(--muted); }
+        .search-hint {
+            padding: 12px 14px;
+            font-size: 12px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        /* ── 다크 모드 토글 버튼 ── */
+        .theme-toggle {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: var(--muted);
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            flex-shrink: 0;
+        }
+        .theme-toggle:hover {
+            background: var(--border);
+            color: var(--text);
+        }
+        .theme-toggle svg {
+            width: 16px; height: 16px;
+            stroke: currentColor; fill: none;
+            stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+        }
+
         /* ── 블록 정의 (자식이 채움) ── */
     </style>
 
@@ -278,7 +396,25 @@
                 {% endblock %}
             </nav>
 
+            <!-- 통합 검색 바 -->
+            <div class="global-search" id="globalSearch">
+                <span class="global-search-icon">
+                    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </span>
+                <input type="text" id="globalSearchInput" placeholder="파일 검색 (#태그 또는 파일명)" autocomplete="off">
+                <div class="search-results-dropdown" id="searchDropdown">
+                    <div class="search-hint">검색어를 입력하세요. <strong>#태그명</strong>으로 태그 검색 가능</div>
+                </div>
+            </div>
+
             <div class="navbar-actions">
+                <!-- 다크 모드 토글 -->
+                <button type="button" class="theme-toggle" id="themeToggle" title="다크 모드 전환">
+                    <svg viewBox="0 0 24 24" id="themeIcon">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+
                 {% if user.is_authenticated %}
                 <span style="font-size:14px; color:var(--muted);">{{ user.username }}</span>
                 <form action="{% url 'accounts:logout' %}" method="post">
@@ -316,6 +452,99 @@
     </footer>
 
     {% block extra_scripts %}{% endblock %}
+
+    <script>
+    // ── Dark Mode Toggle ──
+    (function() {
+        const html = document.documentElement;
+        const saved = localStorage.getItem('openshelf-theme');
+        if (saved === 'dark') html.classList.add('dark');
+
+        const btn = document.getElementById('themeToggle');
+        const icon = document.getElementById('themeIcon');
+        if (!btn) return;
+
+        function updateIcon() {
+            const isDark = html.classList.contains('dark');
+            icon.innerHTML = isDark
+                ? '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'
+                : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>';
+        }
+        updateIcon();
+
+        btn.addEventListener('click', () => {
+            html.classList.toggle('dark');
+            localStorage.setItem('openshelf-theme', html.classList.contains('dark') ? 'dark' : 'light');
+            updateIcon();
+        });
+    })();
+
+    // ── Global Search ──
+    (function() {
+        const input = document.getElementById('globalSearchInput');
+        const dropdown = document.getElementById('searchDropdown');
+        if (!input || !dropdown) return;
+
+        let debounceTimer;
+        input.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            const q = input.value.trim();
+            if (q.length < 1) {
+                dropdown.classList.remove('open');
+                return;
+            }
+            debounceTimer = setTimeout(() => doSearch(q), 300);
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const q = input.value.trim();
+                if (q) {
+                    window.location.href = '/files/?q=' + encodeURIComponent(q);
+                }
+            }
+        });
+
+        // Ctrl+K shortcut
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                input.focus();
+                input.select();
+            }
+        });
+
+        // Close on outside click
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#globalSearch')) dropdown.classList.remove('open');
+        });
+
+        function doSearch(q) {
+            fetch('/files/api/v1/files/?q=' + encodeURIComponent(q) + '&limit=8')
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.ok) return;
+                    dropdown.innerHTML = '';
+                    if (data.files.length === 0) {
+                        dropdown.innerHTML = '<div class="search-hint">검색 결과가 없습니다.</div>';
+                    } else {
+                        data.files.forEach(f => {
+                            const a = document.createElement('a');
+                            a.className = 'search-result-item';
+                            a.href = '/files/' + f.uid + '/';
+                            a.innerHTML = `
+                                <span class="search-result-name">${f.name}</span>
+                                <span class="search-result-meta">${f.size ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : ''}</span>
+                            `;
+                            dropdown.appendChild(a);
+                        });
+                    }
+                    dropdown.classList.add('open');
+                });
+        }
+    })();
+    </script>
 </body>
 
 </html>

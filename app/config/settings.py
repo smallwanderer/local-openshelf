@@ -216,6 +216,9 @@ EMBEDDING_TOKEN_HEADROOM = int(os.getenv("EMBEDDING_TOKEN_HEADROOM", "256"))
 _embedding_max_tokens_raw = os.getenv("EMBEDDING_MAX_TOKENS")
 if _embedding_max_tokens_raw:
     EMBEDDING_MAX_TOKENS = int(_embedding_max_tokens_raw)
+_query_embedding_max_tokens_raw = os.getenv("QUERY_EMBEDDING_MAX_TOKENS")
+if _query_embedding_max_tokens_raw:
+    QUERY_EMBEDDING_MAX_TOKENS = int(_query_embedding_max_tokens_raw)
 
 # Document AI — Retriever (Hybrid Search)
 EMBEDDING_DISTANCE_STRATEGY = os.getenv("EMBEDDING_DISTANCE_STRATEGY", "inner_product")
@@ -230,6 +233,17 @@ EMBEDDING_DOC_POOL_TOP_K = int(os.getenv("EMBEDDING_DOC_POOL_TOP_K", "5"))
 EMBEDDING_DOC_POOL_TAU = float(os.getenv("EMBEDDING_DOC_POOL_TAU", "5.0"))
 EMBEDDING_DOC_LENGTH_PENALTY_ALPHA = float(os.getenv("EMBEDDING_DOC_LENGTH_PENALTY_ALPHA", "0.10"))
 EMBEDDING_EVIDENCE_CONTEXT_WINDOW = int(os.getenv("EMBEDDING_EVIDENCE_CONTEXT_WINDOW", "1"))
+CONTEXTUAL_COMPRESSION_ENABLED = os.getenv("CONTEXTUAL_COMPRESSION_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+CONTEXTUAL_COMPRESSION_WINDOW_SIZE = int(os.getenv("CONTEXTUAL_COMPRESSION_WINDOW_SIZE", "2"))
+CONTEXTUAL_COMPRESSION_MAX_SEGMENTS_PER_CHUNK = int(os.getenv("CONTEXTUAL_COMPRESSION_MAX_SEGMENTS_PER_CHUNK", "16"))
+CONTEXTUAL_COMPRESSION_TOP_SEGMENTS = int(os.getenv("CONTEXTUAL_COMPRESSION_TOP_SEGMENTS", "3"))
+CONTEXTUAL_COMPRESSION_MAX_CHARS = int(os.getenv("CONTEXTUAL_COMPRESSION_MAX_CHARS", "700"))
+CONTEXTUAL_COMPRESSION_MIN_SCORE = float(os.getenv("CONTEXTUAL_COMPRESSION_MIN_SCORE", "0.1"))
+CONTEXTUAL_COMPRESSION_DENSE_WEIGHT = float(os.getenv("CONTEXTUAL_COMPRESSION_DENSE_WEIGHT", "0.4"))
+CONTEXTUAL_COMPRESSION_SPARSE_WEIGHT = float(os.getenv("CONTEXTUAL_COMPRESSION_SPARSE_WEIGHT", "0.6"))
+RAG_SEARCH_TOP_K = int(os.getenv("RAG_SEARCH_TOP_K", "3"))
+_rag_retrieval_threshold_raw = os.getenv("RAG_RETRIEVAL_THRESHOLD", "0.35").strip()
+RAG_RETRIEVAL_THRESHOLD = float(_rag_retrieval_threshold_raw) if _rag_retrieval_threshold_raw else None
 
 
 # Database

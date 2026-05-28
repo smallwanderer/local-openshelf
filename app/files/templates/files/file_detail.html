@@ -5,6 +5,7 @@
 
 {% block extra_head %}
 {{ block.super }}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   .breadcrumb {
     display: flex;
@@ -12,78 +13,242 @@
     gap: 6px;
     font-size: 13px;
     color: var(--muted);
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     flex-wrap: wrap;
   }
   .breadcrumb a {
     color: var(--accent);
     text-decoration: none;
     font-weight: 500;
-    transition: color 0.12s;
   }
-  .breadcrumb a:hover {
-    color: var(--text);
-    text-decoration: underline;
-  }
+  .breadcrumb a:hover { text-decoration: underline; }
   .breadcrumb .sep { color: var(--muted); font-size: 11px; }
   .breadcrumb .current { color: var(--text); font-weight: 600; }
 
-  .detail-card {
+  /* 2-Column Layout */
+  .detail-layout {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 1024px) {
+    .detail-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* Left: Viewer Section */
+  .viewer-section {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
+    display: flex;
+    flex-direction: column;
+    min-height: 600px;
     overflow: hidden;
   }
-  .detail-header {
+  .viewer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 24px;
-    border-bottom: 1px solid var(--border);
+    justify-content: space-between;
+    background: var(--bg);
   }
-  .detail-title h2 {
-    font-size: 18px;
+  .viewer-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 16px;
     font-weight: 600;
-    margin: 0 0 4px;
-    word-break: break-all;
   }
-  .detail-title p {
+  .viewer-title img { width: 24px; height: 24px; object-fit: contain; }
+  .viewer-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .icon-btn {
+    width: 32px; height: 32px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--text);
+  }
+  .icon-btn:hover { background: var(--bg); border-color: var(--accent); }
+  .icon-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  
+  .viewer-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    color: var(--muted);
+    font-size: 14px;
+    height: 100%;
+    min-height: 600px;
+  }
+  @media (prefers-color-scheme: dark) {
+    .viewer-content { background: #0f172a; }
+  }
+  html.dark .viewer-content { background: #0f172a; }
+  html.dark .tag-chip { background: rgba(37, 99, 235, 0.2); border-color: rgba(37, 99, 235, 0.4); color: #60A5FA; }
+
+  /* Right: Meta Section */
+  .meta-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .meta-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+  }
+  .meta-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* Tags */
+  .tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #EFF6FF;
+    color: #2563EB;
+    border: 1px solid #BFDBFE;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  @media (prefers-color-scheme: dark) {
+    .tag-chip { background: rgba(37, 99, 235, 0.2); border-color: rgba(37, 99, 235, 0.4); color: #60A5FA; }
+  }
+  .tag-remove {
+    cursor: pointer;
+    opacity: 0.6;
+    display: flex;
+  }
+  .tag-remove:hover { opacity: 1; }
+  .tag-remove svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2; }
+  
+  .tag-input-wrap {
+    display: flex;
+    align-items: center;
+  }
+  .tag-input {
+    border: 1px dashed var(--border);
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    outline: none;
+    width: 100px;
+    color: var(--text);
+  }
+  .tag-input:focus { border-color: var(--accent); border-style: solid; }
+
+  /* Summary */
+  .summary-content {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+  .summary-empty {
     font-size: 13px;
     color: var(--muted);
-    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    border-radius: var(--radius);
+    text-align: center;
+    border: 1px dashed var(--border);
   }
-  .detail-body {
-    padding: 24px;
+  .summary-edit-area {
+    display: none;
+    flex-direction: column;
+    gap: 10px;
   }
-  .detail-grid {
+  .summary-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* Info Grid */
+  .info-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
   }
-  .detail-item {
+  .info-item {
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
-  .detail-label {
-    font-size: 12px;
+  .info-label {
+    font-size: 11px;
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
   }
-  .detail-value {
-    font-size: 14px;
-    color: var(--text);
+  .info-value {
+    font-size: 13px;
     font-weight: 500;
   }
-  .detail-actions {
+  
+  /* Buttons */
+  .action-btn {
     display: flex;
-    gap: 10px;
-    padding: 20px 24px;
-    border-top: 1px solid var(--border);
-    background: var(--bg);
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    transition: all 0.15s;
   }
+  .action-btn:hover { background: var(--bg); }
+  .action-btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .action-btn.primary:hover { filter: brightness(1.1); }
+  .action-btn.danger { color: var(--danger); }
+  .action-btn.danger:hover { background: #FEF2F2; border-color: #FECACA; }
 </style>
 {% endblock %}
 
@@ -102,60 +267,372 @@
   {% endif %}
 </div>
 
-<div class="detail-card">
-  <div class="detail-header">
-    <div class="detail-icon">
-      {% if file.mime_type and 'image' in file.mime_type %}
-        <img src="{% static 'assets/icons/image.svg' %}" alt="image icon" width="48" height="48">
-      {% elif file.mime_type and 'pdf' in file.mime_type %}
-        <img src="{% static 'assets/icons/file-p.svg' %}" alt="pdf icon" width="48" height="48">
-      {% elif file.ext in '.hwp,.hwpx' %}
-        <img src="{% static 'assets/icons/hwp.svg' %}" alt="hwp icon" width="48" height="48">
-      {% elif file.ext in '.doc,.docx,.txt' %}
-        <img src="{% static 'assets/icons/doc.svg' %}" alt="doc icon" width="48" height="48">
-      {% else %}
-        <img src="{% static 'assets/icons/other.svg' %}" alt="file icon" width="48" height="48">
-      {% endif %}
+<div class="detail-layout">
+  <!-- Left: Viewer Section -->
+  <div class="viewer-section">
+    <div class="viewer-header">
+      <div class="viewer-title">
+        {% if file.mime_type and 'image' in file.mime_type %}
+          <img src="{% static 'assets/icons/image.svg' %}" alt="image icon">
+        {% elif file.mime_type and 'pdf' in file.mime_type %}
+          <img src="{% static 'assets/icons/file-p.svg' %}" alt="pdf icon">
+        {% elif file.ext in '.hwp,.hwpx' %}
+          <img src="{% static 'assets/icons/hwp.svg' %}" alt="hwp icon">
+        {% elif file.ext in '.doc,.docx,.txt' %}
+          <img src="{% static 'assets/icons/doc.svg' %}" alt="doc icon">
+        {% else %}
+          <img src="{% static 'assets/icons/other.svg' %}" alt="file icon">
+        {% endif %}
+        {{ file.name }}
+      </div>
+      <div class="viewer-actions">
+        <button type="button" class="icon-btn" title="즐겨찾기" onclick="toggleStar('{{ file.uid }}')">
+          <svg viewBox="0 0 24 24" id="star-icon" {% if file.starred %}style="fill:#F59E0B;stroke:#F59E0B;"{% endif %}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+        </button>
+        <a href="/files/api/v1/{{ file.uid }}/download/" class="icon-btn" title="다운로드">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </a>
+      </div>
     </div>
-    <div class="detail-title">
-      <h2>{{ file.name }}</h2>
-      <p>{{ file.mime_type|default:"Unknown file type" }}</p>
-    </div>
-  </div>
-  <div class="detail-body">
-    <div class="detail-grid">
-      <div class="detail-item">
-        <span class="detail-label">File Size</span>
-        <span class="detail-value">{{ file.size_display }}</span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">Uploaded At</span>
-        <span class="detail-value">{{ file.created_at|date:"Y-m-d H:i" }}</span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">Format</span>
-        <span class="detail-value">{{ file.mime_type|default:"-" }}</span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">Overall Status</span>
-        <span class="detail-value">{{ file.get_status_display|default:"Uploaded" }}</span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">Parse Status</span>
-        <span class="detail-value">{{ file.get_ai_status.parse_label|default:"Parsing queued" }}</span>
-      </div>
-      <div class="detail-item">
-        <span class="detail-label">Embedding Status</span>
-        <span class="detail-value">{{ file.get_ai_status.embedding_label|default:"Waiting for parsing" }}</span>
+    <div class="viewer-content" id="viewerContent">
+      <div>
+        <p style="text-align:center; margin-bottom: 10px;">
+          <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+        </p>
+        <p>미리보기 준비 중이거나 지원하지 않는 형식입니다.</p>
+        <div style="text-align:center; margin-top:20px;">
+          <a href="/files/api/v1/{{ file.uid }}/download/" class="btn btn-primary">직접 다운로드하여 열기</a>
+        </div>
       </div>
     </div>
   </div>
-  <div class="detail-actions">
-    <a href="/files/api/v1/{{ file.uid }}/download/" class="btn btn-primary" style="display:flex; align-items:center; gap:6px;">
-      <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Download
-    </a>
-    <a href="{% url 'files:index' %}" class="btn btn-secondary">Back to files</a>
+
+  <!-- Right: Meta Section -->
+  <div class="meta-section">
+    
+    <!-- Tags Card -->
+    <div class="meta-card">
+      <div class="meta-card-title">해시태그</div>
+      <div class="tag-list" id="tagList">
+        <!-- Tags will be rendered by JS -->
+      </div>
+    </div>
+
+    <!-- Summary Card -->
+    <div class="meta-card">
+      <div class="meta-card-title">
+        AI 요약
+        <button type="button" class="icon-btn" style="width:24px;height:24px;border:none;" onclick="startSummaryEdit()" title="요약 수정">
+          <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+        </button>
+      </div>
+      
+      <div id="summaryDisplay">
+        <div id="summaryText" class="summary-content"></div>
+        <div id="summaryEmpty" class="summary-empty" style="display:none;">
+          <p style="margin:0 0 10px 0;">작성된 요약이 없습니다.</p>
+          <button type="button" class="btn btn-secondary" style="font-size:12px;padding:6px 10px;" onclick="startSummaryEdit()">✏️ 직접 작성하기</button>
+        </div>
+      </div>
+
+      <div id="summaryEditArea" class="summary-edit-area">
+        <textarea id="summaryInput" class="summary-textarea" placeholder="이 문서의 핵심 요약을 적어두면 검색에 도움이 됩니다."></textarea>
+        <div class="edit-actions">
+          <button type="button" class="btn btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="cancelSummaryEdit()">취소</button>
+          <button type="button" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="saveSummary()">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Metadata Card -->
+    <div class="meta-card">
+      <div class="meta-card-title">상세 정보</div>
+      <div class="info-grid">
+        <div class="info-item">
+          <span class="info-label">파일 형식</span>
+          <span class="info-value">
+            {% if file.mime_type and 'image' in file.mime_type %}이미지{% elif file.mime_type and 'pdf' in file.mime_type %}PDF 문서{% elif file.ext in '.hwp,.hwpx' %}아래아한글{% else %}일반 파일{% endif %}
+          </span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">용량</span>
+          <span class="info-value">{{ file.size_display }}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">업로드 날짜</span>
+          <span class="info-value">{{ file.created_at|date:"Y. m. d. H:i" }}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">AI 분석 상태</span>
+          <span class="info-value" style="display:flex;align-items:center;gap:6px;">
+            {% if file.get_ai_status.embedding_completed %}
+              <span style="color:#10B981;">✔️ 완료됨</span>
+            {% elif file.get_ai_status.embedding_status.value == 'FAILED' or file.get_ai_status.parse_status.value == 'FAILED' %}
+              <span style="color:#EF4444;">❌ 오류 발생</span>
+            {% else %}
+              <span style="color:#F59E0B;">⏳ 처리 중... <span style="font-size:11px;opacity:0.7;">({{ file.get_ai_status.embedding_label }})</span></span>
+            {% endif %}
+          </span>
+        </div>
+        <div class="info-item" style="grid-column: 1 / -1;">
+          <span class="info-label">파일 무결성 (SHA-256)</span>
+          <span class="info-value" style="font-family:monospace; font-size:11px; word-break:break-all; opacity:0.8;">{% if file.blob.sha256 %}🔒 {{ file.blob.sha256 }}{% else %}—{% endif %}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions Card -->
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <a href="{% url 'files:page_rag' %}?nodes={{ file.uid }}" class="action-btn primary">
+        <img src="{% static 'assets/rag/rag-question.svg' %}" alt="" width="18" height="18" style="object-fit:contain;filter:invert(1);">
+        이 문서에 RAG 질문하기
+      </a>
+      <button type="button" class="action-btn danger" onclick="deleteFile('{{ file.uid }}')">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M9 6V4h6v2"></path></svg>
+        휴지통으로 이동
+      </button>
+    </div>
+
   </div>
 </div>
+
+<script>
+  const fileUid = "{{ file.uid }}";
+  let currentSummary = `{{ file.parse_result.summary|escapejs|default:"" }}`;
+  let currentTags = [];
+  {% if file.parse_result.auto_tags %}
+    currentTags = {{ file.parse_result.auto_tags|safe }};
+  {% endif %}
+
+  function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+      const cookies = document.cookie.split(';');
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
+      }
+    }
+    return cookieValue;
+  }
+
+  // --- Summary Logic ---
+  function renderSummary() {
+    const textEl = document.getElementById('summaryText');
+    const emptyEl = document.getElementById('summaryEmpty');
+    
+    if (currentSummary && currentSummary.trim().length > 0) {
+      textEl.textContent = currentSummary;
+      textEl.style.display = 'block';
+      emptyEl.style.display = 'none';
+    } else {
+      textEl.style.display = 'none';
+      emptyEl.style.display = 'block';
+    }
+  }
+
+  function startSummaryEdit() {
+    document.getElementById('summaryDisplay').style.display = 'none';
+    const editArea = document.getElementById('summaryEditArea');
+    editArea.style.display = 'flex';
+    const input = document.getElementById('summaryInput');
+    input.value = currentSummary;
+    input.focus();
+  }
+
+  function cancelSummaryEdit() {
+    document.getElementById('summaryDisplay').style.display = 'block';
+    document.getElementById('summaryEditArea').style.display = 'none';
+  }
+
+  function saveSummary() {
+    const newVal = document.getElementById('summaryInput').value.trim();
+    updateMeta({ summary: newVal }).then(ok => {
+      if (ok) {
+        currentSummary = newVal;
+        renderSummary();
+        cancelSummaryEdit();
+      }
+    });
+  }
+
+  // --- Tags Logic ---
+  function renderTags() {
+    const list = document.getElementById('tagList');
+    list.innerHTML = '';
+    
+    currentTags.forEach((tag, idx) => {
+      const chip = document.createElement('div');
+      chip.className = 'tag-chip';
+      chip.innerHTML = `
+        <span>#${tag}</span>
+        <span class="tag-remove" onclick="removeTag(${idx})">
+          <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </span>
+      `;
+      list.appendChild(chip);
+    });
+
+    // Add Tag Input
+    const wrap = document.createElement('div');
+    wrap.className = 'tag-input-wrap';
+    wrap.innerHTML = `<input type="text" class="tag-input" placeholder="+ 태그 추가" onkeydown="handleTagInput(event)">`;
+    list.appendChild(wrap);
+  }
+
+  function handleTagInput(e) {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const val = e.target.value.replace(',', '').trim();
+      if (val && !currentTags.includes(val)) {
+        const newTags = [...currentTags, val];
+        updateMeta({ auto_tags: newTags }).then(ok => {
+          if (ok) {
+            currentTags = newTags;
+            renderTags();
+          }
+        });
+      }
+      e.target.value = '';
+    }
+  }
+
+  function removeTag(idx) {
+    const newTags = currentTags.filter((_, i) => i !== idx);
+    updateMeta({ auto_tags: newTags }).then(ok => {
+      if (ok) {
+        currentTags = newTags;
+        renderTags();
+      }
+    });
+  }
+
+  // --- API ---
+  function updateMeta(payload) {
+    return fetch(`/files/api/v1/${fileUid}/meta/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify(payload)
+    }).then(res => res.json()).then(data => {
+      if (!data.ok) alert(data.errors ? data.errors.join('\\n') : '업데이트 실패');
+      return data.ok;
+    }).catch(err => {
+      alert('오류가 발생했습니다.');
+      return false;
+    });
+  }
+
+  function toggleStar(uid) {
+    fetch(`/files/api/v1/toggle_star/${uid}/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') }
+    }).then(r => r.json()).then(data => {
+      if(data.ok) {
+        const icon = document.getElementById('star-icon');
+        if(data.starred) {
+          icon.style.fill = '#F59E0B';
+          icon.style.stroke = '#F59E0B';
+        } else {
+          icon.style.fill = 'none';
+          icon.style.stroke = 'currentColor';
+        }
+      }
+    });
+  }
+
+  function deleteFile(uid) {
+    if (confirm('이 파일을 휴지통으로 이동하시겠습니까?')) {
+      fetch(`/files/api/v1/${uid}/delete/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCookie('csrftoken') }
+      }).then(r=>r.json()).then(data=>{
+        if(data.ok) window.location.href = '/files/';
+      });
+    }
+  }
+
+  // --- Viewer Logic ---
+  const fileMime = "{{ file.mime_type|default:'' }}";
+  const fileExt = "{{ file.ext|default:'' }}".toLowerCase();
+  const downloadUrl = `/files/api/v1/${fileUid}/download/`;
+  const inlineUrl = `/files/api/v1/${fileUid}/download/?inline=1`;
+  const parsedUrl = `/files/api/v1/${fileUid}/parsed_text/`;
+  
+  function renderViewer() {
+    const vc = document.getElementById('viewerContent');
+    vc.innerHTML = '';
+    
+    // Reset defaults
+    vc.style.padding = '0';
+    vc.style.alignItems = 'stretch';
+    vc.style.justifyContent = 'flex-start';
+
+    if (fileMime.startsWith('image/')) {
+      vc.style.padding = '24px';
+      vc.style.alignItems = 'center';
+      vc.style.justifyContent = 'center';
+      vc.innerHTML = `<img src="${inlineUrl}" style="max-width:100%; max-height:100%; object-fit:contain; border-radius:4px;">`;
+    } else if (fileMime === 'application/pdf') {
+      vc.innerHTML = `<iframe src="${inlineUrl}#view=FitH&toolbar=0" style="width:100%; height:100%; min-height:650px; border:none; display:block;"></iframe>`;
+    } else if (['.txt', '.md', '.csv', '.json', '.log'].includes(fileExt)) {
+      fetch(inlineUrl)
+        .then(res => res.text())
+        .then(text => {
+          vc.style.padding = '24px';
+          vc.innerHTML = `<pre style="white-space:pre-wrap; width:100%; height:100%; margin:0; font-family:monospace; color:var(--text);">${text}</pre>`;
+        });
+    } else {
+      // Fetch AI parsed markdown
+      fetch(parsedUrl)
+        .then(res => {
+          if (!res.ok) throw new Error('Not parsed');
+          return res.json();
+        })
+        .then(data => {
+          if (data.ok && data.text) {
+            vc.style.padding = '24px';
+            const htmlContent = marked.parse(data.text);
+            vc.innerHTML = `
+              <div style="background:#FEF3C7; color:#92400E; padding:10px 14px; border-radius:6px; font-size:13px; margin-bottom:20px; border:1px solid #FCD34D;">
+                <strong>💡 참고:</strong> 이 파일은 브라우저 미리보기를 지원하지 않아 <strong>AI가 추출한 텍스트 구조</strong>로 보여집니다. 원본 양식이 깨져 보일 수 있습니다.
+              </div>
+              <div style="color:var(--text); line-height:1.6;" class="markdown-body">
+                ${htmlContent}
+              </div>
+            `;
+          }
+        })
+        .catch(err => {
+          vc.style.padding = '24px';
+          vc.style.alignItems = 'center';
+          vc.style.justifyContent = 'center';
+          vc.innerHTML = `
+            <div style="text-align:center;">
+              <p style="text-align:center; margin-bottom: 10px;">
+                <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              </p>
+              <p>미리보기 준비 중이거나 지원하지 않는 형식입니다.</p>
+              <div style="text-align:center; margin-top:20px;">
+                <a href="${downloadUrl}" class="btn btn-primary">직접 다운로드하여 열기</a>
+              </div>
+            </div>
+          `;
+        });
+    }
+  }
+
+  // Init
+  document.addEventListener('DOMContentLoaded', () => {
+    renderSummary();
+    renderTags();
+    renderViewer();
+  });
+</script>
 {% endblock %}
+

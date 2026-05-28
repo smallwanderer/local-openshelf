@@ -618,6 +618,14 @@
         </div>
         
         <div class="evidence-list">
+          ${res.compressed_text ? `
+            <div class="evidence-item">
+              <div class="evidence-meta"><span>COMPRESSED DOCUMENT CONTEXT</span></div>
+              <div style="font-size: 0.938rem; line-height: 1.6; color: #334155;">
+                ${escapeHtml(res.compressed_text)}
+              </div>
+            </div>
+          ` : ''}
           ${(res.evidences || []).map(ev => `
             <div class="evidence-item">
               <div class="evidence-meta">
@@ -625,7 +633,7 @@
                 <span>PAGES: ${escapeHtml(ev.pages || '')}</span>
               </div>
               <div style="font-size: 0.938rem; line-height: 1.6; color: #334155;">
-                ${escapeHtml(ev.text || '')}
+                ${escapeHtml(ev.compressed_text || ev.context_text || ev.text || '')}
               </div>
               <div class="score-breakdown">
                 <div class="breakdown-item"><strong>Hybrid:</strong> ${formatScore(ev.hybrid_score)}</div>

@@ -51,10 +51,12 @@ def purge_expired_trash(user):
 def _with_file_relations(qs):
     return qs.select_related("blob", "parse_result").prefetch_related("parse_result__chunks")
 
-def get_user_files(user, q=None, parent_id=None):
+def get_user_files(user, q=None, parent_id=None, tag=None):
     qs = Node.objects.filter(owner=user, trashed=False).order_by("-created_at")
     if q:
         qs = qs.filter(Q(name__icontains=q) | Q(description__icontains=q))
+    elif tag:
+        qs = qs.filter(parse_result__auto_tags__contains=[tag])
     else:
         if parent_id:
             # Frontend sends UUID as parent_id

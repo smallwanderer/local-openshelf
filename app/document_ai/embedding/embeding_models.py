@@ -4,6 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict
 
+from django.conf import settings
+
 try:
     import torch
 except ImportError:  # pragma: no cover - exercised only when torch is unavailable
@@ -186,3 +188,41 @@ def bge_m3_embedder(
         )
 
     raise ValueError(f"Unsupported embedding backend: {resolved_backend}")
+
+
+def embed_document(
+    text: str,
+    model_name: str = "BAAI/bge-m3",
+    max_length: int | None = None,
+    backend: str | None = None,
+) -> EmbeddingResult:
+    """
+    Embed a stored document chunk. This is the public entrypoint for chunk
+    embeddings so document-side policy can evolve independently.
+    """
+    return bge_m3_embedder(
+        text=text,
+        model_name=model_name,
+        max_length=max_length,
+        backend=backend,
+    )
+
+
+def embed_query(
+    query: str,
+    model_name: str = "BAAI/bge-m3",
+    max_length: int | None = None,
+    backend: str | None = None,
+) -> EmbeddingResult:
+    """
+    Embed a user search query. It currently uses the same BGE-M3 encoder as
+    document chunks, but keeps query-side token limits and future rewrite or
+    instruction policy separate.
+    """
+    resolved_max_length = max_length or getattr(settings, "QUERY_EMBEDDING_MAX_TOKENS", None)
+    return bge_m3_embedder(
+        text=query,
+        model_name=model_name,
+        max_length=resolved_max_length,
+        backend=backend,
+    )

@@ -15,6 +15,187 @@
     flex-wrap: wrap;
   }
 
+  .surface-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+  }
+
+  .surface-strip.compact {
+    padding: 8px 10px;
+  }
+
+  .ai-readiness-panel {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr);
+    gap: 14px;
+    align-items: center;
+  }
+
+  .ai-readiness-title {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .ai-readiness-title strong {
+    font-size: 13px;
+  }
+
+  .ai-readiness-summary {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .ai-readiness-meter {
+    display: grid;
+    gap: 7px;
+  }
+
+  .ai-readiness-bar {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+
+  .ai-readiness-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+
+  .ai-readiness-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .mode-toggle button {
+    min-width: 88px;
+    padding: 8px 12px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font);
+    cursor: pointer;
+  }
+
+  .mode-toggle button.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+
+  .bulk-toolbar,
+  .upload-progress-panel {
+    display: none;
+  }
+
+  .bulk-toolbar.show,
+  .upload-progress-panel.show {
+    display: flex;
+  }
+
+  .bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .inline-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font);
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .inline-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .inline-btn.danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: #FEF2F2;
+  }
+
+  .inline-btn.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: white;
+  }
+
+  .upload-items {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .upload-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) 180px 76px;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  .progress-track {
+    height: 7px;
+    border-radius: 999px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    width: 0%;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s;
+  }
+
+  .select-box {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
   .search-wrap {
     position: relative;
     flex: 1;
@@ -119,6 +300,18 @@
     gap: 12px;
     position: relative;
     transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+  }
+
+  .file-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  }
+
+  .card-select {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 2;
   }
 
   .file-card:hover {
@@ -292,6 +485,14 @@
     border-color: #DDD6FE;
   }
 
+  .status-badge.failed {
+    color: var(--danger);
+    background: #FEF2F2;
+    border-color: #FECACA;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
   .list-status-badges {
     display: inline-flex;
     align-items: center;
@@ -353,6 +554,10 @@
 
   .file-table tbody tr:hover td {
     background: var(--bg);
+  }
+
+  .file-table tbody tr.selected td {
+    background: rgba(37, 99, 235, 0.08);
   }
 
   .file-name-cell {
@@ -418,6 +623,11 @@
   .icon-btn.danger:hover {
     background: #FEF2F2;
     color: var(--danger);
+  }
+
+  .icon-btn.retry:hover {
+    background: #ECFDF5;
+    color: #059669;
   }
 
   .icon-btn.starred {
@@ -718,6 +928,76 @@
     display: flex;
     gap: 10px;
   }
+  /* 최근 검색 기록 섹션 */
+  .recent-history-section {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .recent-history-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+  .recent-history-header svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--accent);
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .recent-history-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+  }
+  .recent-history-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .recent-history-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    border-color: var(--accent);
+  }
+  .history-q {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .history-a {
+    font-size: 12px;
+    color: var(--muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.5;
+  }
+  .history-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+  }
 </style>
 {% endblock %}
 
@@ -746,15 +1026,56 @@
   <h2>{% if current_folder_name %}{{ current_folder_name }}{% else %}모든 파일{% endif %}</h2>
   <div class="section-actions" style="display: flex; align-items: center; gap: 12px;">
     <span class="meta-text" id="fileCount" style="margin-right: 4px;">0개 파일</span>
+    <button type="button" class="inline-btn" id="langToggle" title="Korean / English">Kor</button>
+    <input type="file" id="inlineUploadInput" multiple style="display:none;">
+    <button type="button" class="btn btn-secondary" id="inlineUploadBtn" style="padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+      <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <span data-i18n="upload">파일 업로드</span>
+    </button>
     <button type="button" class="btn btn-secondary" onclick="openCreateFolderModal()" style="padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      새 폴더
+      <span data-i18n="newFolder">새 폴더</span>
     </button>
+  </div>
+</div>
+
+<div class="surface-strip upload-progress-panel" id="uploadProgressPanel">
+  <div class="upload-items" id="uploadProgressItems"></div>
+</div>
+
+<div class="surface-strip ai-readiness-panel" id="aiReadinessPanel">
+  <div class="ai-readiness-title">
+    <strong>AI 분석 준비 상태</strong>
+    <span class="ai-readiness-summary" id="aiReadinessSummary">상태를 불러오는 중입니다.</span>
+  </div>
+  <div class="ai-readiness-meter">
+    <div class="ai-readiness-bar" aria-hidden="true">
+      <div class="ai-readiness-fill" id="aiReadinessFill"></div>
+    </div>
+    <div class="ai-readiness-stats" id="aiReadinessStats">
+      <span>검색 가능 0/0</span>
+    </div>
+  </div>
+</div>
+
+<div class="surface-strip compact bulk-toolbar" id="bulkToolbar">
+  <strong class="meta-text" id="selectedCount">0개 선택됨</strong>
+  <div class="bulk-actions">
+    <button type="button" class="inline-btn primary" id="bulkRagBtn" data-i18n="askRag">질문하기</button>
+    <button type="button" class="inline-btn" id="bulkMoveBtn" data-i18n="move">이동</button>
+    <button type="button" class="inline-btn" id="bulkRestoreBtn" data-i18n="restore">복원</button>
+    <button type="button" class="inline-btn danger" id="bulkDeleteBtn" data-i18n="delete">삭제</button>
+    <button type="button" class="inline-btn" id="clearSelectionBtn" data-i18n="clearSelection">선택 해제</button>
   </div>
 </div>
 
 <!-- 툴바 -->
 <div class="toolbar">
+  <div class="mode-toggle" role="group" aria-label="Search mode">
+    <button type="button" id="normalSearchBtn" class="active" data-mode="normal" data-i18n="normalSearch">일반 검색</button>
+    <button type="button" id="aiSearchBtn" data-mode="ai" data-i18n="aiSearch">AI 검색</button>
+  </div>
+
   <div class="search-wrap">
     <svg viewBox="0 0 24 24">
       <circle cx="11" cy="11" r="8" />
@@ -763,10 +1084,6 @@
     <input class="search-input" type="search" id="fileSearch" placeholder="파일 검색...">
   </div>
 
-  <!-- AI 검색 모드 토글 -->
-  <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; cursor: pointer; color: var(--accent);">
-    <input type="checkbox" id="aiSearchToggle" style="accent-color: var(--accent); transform: scale(1.1);"> ✨ 본문 AI 검색
-  </label>
   <select class="filter-select" id="aiTopK" style="display: none; width: auto;">
     <option value="3">Top 3건</option>
     <option value="5" selected>Top 5건</option>
@@ -828,6 +1145,7 @@
     <table class="file-table">
       <thead>
         <tr>
+          <th style="width:40px;"><input type="checkbox" class="select-box" id="selectAllList" title="전체 선택"></th>
           <th style="width:40px;"></th>
           <th>이름</th>
           <th>형식</th>
@@ -848,6 +1166,18 @@
   <h3>업로드된 파일이 없습니다</h3>
   <p>파일을 업로드하면 여기에 표시됩니다</p>
   <a href="{% url 'files:page_upload' %}" class="btn btn-primary">파일 업로드</a>
+</div>
+
+<!-- ── 최근 검색 기록 ── -->
+<div class="recent-history-section" id="recentHistorySection" style="display: none;">
+  <div class="recent-history-header">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+    <h3 style="margin:0; font-size: 14px;">최근 AI 검색 기록</h3>
+    <a href="{% url 'files:page_ai_history' %}" style="margin-left:auto; font-size:12px; color:var(--accent); text-decoration:none; font-weight: 500;">전체 보기 &rarr;</a>
+  </div>
+  <div class="recent-history-grid" id="recentHistoryGrid">
+    <!-- JS 렌더링 -->
+  </div>
 </div>
 
 <!-- 컨텍스트 메뉴 -->
@@ -896,6 +1226,29 @@
   </div>
 </div>
 
+<!-- ── AI 검색 기록 상세 모달 ── -->
+<div class="modal-overlay" id="ragHistoryModal" style="display:none;">
+  <div class="modal-content" style="width: 600px; max-width: 90vw;">
+    <div class="modal-header">
+      <h3 style="margin: 0; font-size: 16px; font-weight: 600;">AI 검색 상세 기록</h3>
+      <button class="modal-close" onclick="document.getElementById('ragHistoryModal').classList.remove('show'); setTimeout(() => document.getElementById('ragHistoryModal').style.display='none', 200);">
+        <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+      <div style="background: var(--bg); padding: 12px; border-radius: var(--radius); margin-bottom: 16px;">
+        <div style="font-weight: 600; font-size: 13px; color: var(--accent); margin-bottom: 6px;">Q. <span id="historyModalQ"></span></div>
+        <div style="font-size: 11px; color: var(--muted);" id="historyModalDate"></div>
+      </div>
+      <div style="font-size: 14px; line-height: 1.6; color: var(--text); margin-bottom: 24px; white-space: pre-wrap;" id="historyModalA"></div>
+      
+      <h4 style="font-size: 13px; margin: 0 0 10px 0; color: var(--text);">참고 문서 (<span id="historyModalCitCount">0</span>)</h4>
+      <div id="historyModalCitations" style="display: flex; flex-direction: column; gap: 8px;"></div>
+    </div>
+  </div>
+</div>
+
+
 {% endblock %}
 
 
@@ -919,40 +1272,95 @@
 
   let allFiles = [];
   const VIEW_STORAGE_KEY = 'openshelf:file-list:view';
+  const LANG_STORAGE_KEY = 'openshelf:file-list:lang';
   let currentView = loadSavedViewMode();
+  let searchMode = 'normal';
+  let selectedUids = new Set();
+  let currentLang = loadSavedLanguage();
   const currentFolderUid = '{{ current_folder_uid|default:"" }}';
   const STATUS_ICON_BASE = '{% static "assets/status" %}';
 
+  const UI_TEXT = {
+    ko: {
+      upload: '파일 업로드',
+      newFolder: '새 폴더',
+      normalSearch: '일반 검색',
+      aiSearch: 'AI 검색',
+      searchPlaceholder: '파일 검색...',
+      aiPlaceholder: '문서 본문 AI 검색...',
+      move: '이동',
+      restore: '복원',
+      delete: '삭제',
+      clearSelection: '선택 해제',
+      askRag: '질문하기',
+      selected: count => `${count}개 선택됨`,
+      fileCount: count => `${count}개 파일`,
+      folder: '폴더',
+      download: '다운로드',
+      retry: '재시도',
+      uploading: '업로드 중',
+      uploadDone: '완료',
+      uploadFailed: '실패',
+      emptyTitle: '업로드된 파일이 없습니다',
+      emptyBody: '파일을 업로드하면 여기에 표시됩니다',
+    },
+    en: {
+      upload: 'Upload',
+      newFolder: 'New folder',
+      normalSearch: 'Search',
+      aiSearch: 'AI search',
+      searchPlaceholder: 'Search files...',
+      aiPlaceholder: 'Search document content with AI...',
+      move: 'Move',
+      restore: 'Restore',
+      delete: 'Delete',
+      clearSelection: 'Clear',
+      askRag: 'Ask',
+      selected: count => `${count} selected`,
+      fileCount: count => `${count} files`,
+      folder: 'Folder',
+      download: 'Download',
+      retry: 'Retry',
+      uploading: 'Uploading',
+      uploadDone: 'Done',
+      uploadFailed: 'Failed',
+      emptyTitle: 'No files uploaded',
+      emptyBody: 'Uploaded files will appear here',
+    },
+  };
+
   document.addEventListener("DOMContentLoaded", () => {
+    applyLanguage();
     applyViewButtonState();
+    applySearchMode();
+    loadAIReadiness();
     fetchFiles();
 
     let searchTimeout = null;
 
     document.getElementById('fileSearch').addEventListener('input', () => {
       clearTimeout(searchTimeout);
-      const isAI = document.getElementById('aiSearchToggle').checked;
-      if (isAI) {
-        // AI 검색 시 타이핑마다 즉시 쏘지 않도록 디바운스 적용
+      if (searchMode === 'ai') {
         searchTimeout = setTimeout(performAISearch, 500);
       } else {
         renderFiles();
       }
     });
 
-    document.getElementById('aiSearchToggle').addEventListener('change', (e) => {
-      const topKSelect = document.getElementById('aiTopK');
-      if (e.target.checked) {
-        topKSelect.style.display = 'inline-block';
-        performAISearch(); // 토글 켜면 즉시 실행
-      } else {
-        topKSelect.style.display = 'none';
-        renderFiles(); // 일반 검색으로 원복
-      }
-    });
+    document.getElementById('normalSearchBtn').addEventListener('click', () => setSearchMode('normal'));
+    document.getElementById('aiSearchBtn').addEventListener('click', () => setSearchMode('ai'));
+    document.getElementById('langToggle').addEventListener('click', toggleLanguage);
+    document.getElementById('inlineUploadBtn').addEventListener('click', () => document.getElementById('inlineUploadInput').click());
+    document.getElementById('inlineUploadInput').addEventListener('change', (event) => uploadFiles(event.target.files));
+    document.getElementById('bulkRagBtn').addEventListener('click', openRagForSelected);
+    document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDeleteSelected);
+    document.getElementById('bulkRestoreBtn').addEventListener('click', bulkRestoreSelected);
+    document.getElementById('bulkMoveBtn').addEventListener('click', bulkMoveSelected);
+    document.getElementById('clearSelectionBtn').addEventListener('click', clearSelection);
+    document.getElementById('selectAllList').addEventListener('change', toggleSelectAllVisible);
 
     document.getElementById('aiTopK').addEventListener('change', () => {
-      if (document.getElementById('aiSearchToggle').checked) {
+      if (searchMode === 'ai') {
         performAISearch();
       }
     });
@@ -986,6 +1394,48 @@
     }
   }
 
+  function loadSavedLanguage() {
+    try {
+      return localStorage.getItem(LANG_STORAGE_KEY) === 'en' ? 'en' : 'ko';
+    } catch (error) {
+      return 'ko';
+    }
+  }
+
+  function t(key, ...args) {
+    const value = (UI_TEXT[currentLang] || UI_TEXT.ko)[key];
+    return typeof value === 'function' ? value(...args) : value;
+  }
+
+  function applyLanguage() {
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.dataset.i18n;
+      if (UI_TEXT[currentLang][key]) el.textContent = t(key);
+    });
+    document.getElementById('langToggle').textContent = currentLang === 'ko' ? 'ENG' : 'KOR';
+    document.getElementById('fileSearch').placeholder = searchMode === 'ai' ? t('aiPlaceholder') : t('searchPlaceholder');
+    const empty = document.getElementById('emptyState');
+    if (empty) {
+      const title = empty.querySelector('h3');
+      const body = empty.querySelector('p');
+      const button = empty.querySelector('a');
+      if (title) title.textContent = t('emptyTitle');
+      if (body) body.textContent = t('emptyBody');
+      if (button) button.textContent = t('upload');
+    }
+  }
+
+  function toggleLanguage() {
+    currentLang = currentLang === 'ko' ? 'en' : 'ko';
+    try {
+      localStorage.setItem(LANG_STORAGE_KEY, currentLang);
+    } catch (error) {
+      // Ignore storage errors.
+    }
+    applyLanguage();
+    renderFiles();
+  }
+
   function saveViewMode(viewMode) {
     try {
       localStorage.setItem(VIEW_STORAGE_KEY, viewMode);
@@ -1010,6 +1460,25 @@
     renderFiles();
   }
 
+  function setSearchMode(mode) {
+    searchMode = mode === 'ai' ? 'ai' : 'normal';
+    applySearchMode();
+    if (searchMode === 'ai') {
+      performAISearch();
+    } else {
+      renderFiles();
+    }
+  }
+
+  function applySearchMode() {
+    document.getElementById('normalSearchBtn').classList.toggle('active', searchMode === 'normal');
+    document.getElementById('aiSearchBtn').classList.toggle('active', searchMode === 'ai');
+    document.getElementById('aiTopK').style.display = searchMode === 'ai' ? 'inline-block' : 'none';
+    document.getElementById('typeFilter').style.display = searchMode === 'ai' ? 'none' : 'inline-block';
+    document.getElementById('sortFilter').style.display = searchMode === 'ai' ? 'none' : 'inline-block';
+    applyLanguage();
+  }
+
   function fetchFiles() {
     let apiUrl = '/files/api/v1/files/';
     if (currentFolderUid) {
@@ -1027,7 +1496,12 @@
       .then(data => {
         if (data && data.ok) {
           allFiles = data.files || [];
+          const validUids = new Set(allFiles.map((file) => file.uid));
+          selectedUids.forEach((uid) => {
+            if (!validUids.has(uid)) selectedUids.delete(uid);
+          });
           renderFiles();
+          loadAIReadiness();
         } else {
           console.error("API 연동 실패 (ok: false)");
         }
@@ -1035,6 +1509,35 @@
       .catch(err => {
         console.error("Fetch 에러:", err);
         renderFiles();
+      });
+  }
+
+  function loadAIReadiness() {
+    const summaryEl = document.getElementById('aiReadinessSummary');
+    const fillEl = document.getElementById('aiReadinessFill');
+    const statsEl = document.getElementById('aiReadinessStats');
+    if (!summaryEl || !fillEl || !statsEl) return;
+
+    fetch('/files/api/v1/ai/readiness/')
+      .then((res) => {
+        if (!res.ok) throw new Error(`readiness failed: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!data.ok) throw new Error('readiness response not ok');
+        const readyPercent = Number(data.ready_percent || 0);
+        fillEl.style.width = `${Math.min(Math.max(readyPercent, 0), 100)}%`;
+        summaryEl.textContent = data.summary || 'AI 분석 준비 상태를 확인했습니다.';
+        statsEl.innerHTML = `
+          <span>검색 가능 ${data.searchable_files}/${data.total_files}</span>
+          <span>파싱 ${data.parse.completed} 완료 · ${data.parse.processing} 진행 · ${data.parse.failed} 실패</span>
+          <span>임베딩 ${data.embedding.completed} 완료 · ${data.embedding.processing} 진행 · ${data.embedding.failed} 실패</span>
+        `;
+      })
+      .catch(() => {
+        summaryEl.textContent = 'AI 분석 준비 상태를 불러올 수 없습니다.';
+        fillEl.style.width = '0%';
+        statsEl.innerHTML = '<span>상태 확인 실패</span>';
       });
   }
 
@@ -1072,6 +1575,70 @@
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const panel = document.getElementById('uploadProgressPanel');
+    const items = document.getElementById('uploadProgressItems');
+    panel.classList.add('show');
+    items.innerHTML = '';
+
+    const uploads = files.map((file, index) => {
+      const row = document.createElement('div');
+      row.className = 'upload-row';
+      row.innerHTML = `
+        <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+        <div class="progress-track"><div class="progress-fill" id="uploadFill-${index}"></div></div>
+        <span class="meta-text" id="uploadStatus-${index}">0%</span>
+      `;
+      items.appendChild(row);
+      return uploadSingleFile(file, index);
+    });
+
+    Promise.allSettled(uploads).then(() => {
+      document.getElementById('inlineUploadInput').value = '';
+      fetchFiles();
+      setTimeout(() => panel.classList.remove('show'), 1800);
+    });
+  }
+
+  function uploadSingleFile(file, index) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const fill = document.getElementById(`uploadFill-${index}`);
+      const status = document.getElementById(`uploadStatus-${index}`);
+      const formData = new FormData();
+      formData.append('file', file);
+      if (currentFolderUid) formData.append('parent_id', currentFolderUid);
+
+      xhr.open('POST', '/files/api/v1/upload/');
+      xhr.setRequestHeader('X-CSRFToken', getCookie('csrftoken'));
+      xhr.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const percent = Math.round((event.loaded / event.total) * 100);
+        fill.style.width = `${percent}%`;
+        status.textContent = `${percent}%`;
+      });
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          fill.style.width = '100%';
+          status.textContent = t('uploadDone');
+          resolve();
+        } else {
+          status.textContent = t('uploadFailed');
+          reject(new Error(`upload failed: ${xhr.status}`));
+        }
+      };
+      xhr.onerror = () => {
+        status.textContent = t('uploadFailed');
+        reject(new Error('upload failed'));
+      };
+      status.textContent = t('uploading');
+      xhr.send(formData);
+    });
   }
 
   function performAISearch() {
@@ -1198,13 +1765,17 @@
     aiContainer.innerHTML = '';
     results.forEach(res => {
       const docScore = parseFloat(res.doc_score || 0).toFixed(2);
+      const documentContext = res.compressed_text || '';
+      const safeDocumentContext = escapeHtml(
+        documentContext.length > 360 ? `${documentContext.substring(0, 360)}...` : documentContext
+      ).replace(/\n/g, '<br>');
 
       let evidencesHtml = '';
       if (res.evidences && Array.isArray(res.evidences)) {
         res.evidences.forEach(ev => {
           const sectionSnippet = ev.section ? ` - ${ev.section}` : '';
           const pagesSnippet = ev.pages && ev.pages !== 'None' ? `[${ev.pages}p]` : '';
-          const rawContext = ev.context_text || ev.text || '';
+          const rawContext = ev.compressed_text || ev.context_text || ev.text || '';
           const truncatedContext = rawContext.length > 240 ? `${rawContext.substring(0, 240)}...` : rawContext;
           const safeText = escapeHtml(truncatedContext).replace(/\n/g, '<br>');
           evidencesHtml += `
@@ -1228,6 +1799,7 @@
           <span style="font-size: 11px; font-weight: normal; color: var(--muted);">Score: ${docScore}</span>
         </div>
         <div class="ai-context" style="margin-top:8px; display:flex; flex-direction:column; gap:4px;">
+          ${safeDocumentContext ? `<div style="padding:10px; background:var(--bg-soft); border-radius:6px; font-size:13px; line-height:1.5; color:var(--text);">${safeDocumentContext}</div>` : ''}
           ${evidencesHtml}
         </div>
         <div class="ai-meta" style="margin-top:6px;">
@@ -1269,12 +1841,149 @@
       `);
     }
 
+    if (aiStatus.parse_status === 'failed' || aiStatus.embedding_status === 'failed') {
+      badges.push(`
+        <span class="status-badge failed" title="AI 처리 실패" aria-label="AI 처리 실패">!</span>
+      `);
+    }
+
     return `<div class="${wrapperClass}">${badges.join('')}</div>`;
   }
 
+  function visibleFilteredFiles() {
+    const searchQ = document.getElementById('fileSearch').value.toLowerCase();
+    const typeF = document.getElementById('typeFilter').value;
+    const sortF = document.getElementById('sortFilter').value;
+
+    const filtered = allFiles.filter(f => {
+      if (searchQ && !(f.name && f.name.toLowerCase().includes(searchQ))) return false;
+      if (typeF) {
+        const type = f.node_type === 'directory' ? 'folder' : getFileIconType(f.name, f.mime_type);
+        if (type !== typeF) return false;
+      }
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      switch (sortF) {
+        case 'name_asc': return a.name.localeCompare(b.name);
+        case 'size_desc': return (b.size || 0) - (a.size || 0);
+        case 'date_asc': return new Date(a.created_at) - new Date(b.created_at);
+        case 'date_desc':
+        default:
+          return new Date(b.created_at) - new Date(a.created_at);
+      }
+    });
+    return filtered;
+  }
+
+  function isAIFailed(file) {
+    const aiStatus = file.ai_status || {};
+    return aiStatus.parse_status === 'failed' || aiStatus.embedding_status === 'failed';
+  }
+
+  function updateBulkToolbar() {
+    const count = selectedUids.size;
+    document.getElementById('bulkToolbar').classList.toggle('show', count > 0);
+    document.getElementById('selectedCount').textContent = t('selected', count);
+    const selectedFiles = allFiles.filter((file) => selectedUids.has(file.uid));
+    document.getElementById('bulkRestoreBtn').style.display = selectedFiles.some((file) => file.trashed) ? 'inline-flex' : 'none';
+    const selectAll = document.getElementById('selectAllList');
+    if (selectAll) {
+      const visible = visibleFilteredFiles();
+      selectAll.checked = visible.length > 0 && visible.every((file) => selectedUids.has(file.uid));
+      selectAll.indeterminate = visible.some((file) => selectedUids.has(file.uid)) && !selectAll.checked;
+    }
+  }
+
+  function toggleSelection(uid, checked, event) {
+    if (event) event.stopPropagation();
+    if (checked) selectedUids.add(uid);
+    else selectedUids.delete(uid);
+    updateBulkToolbar();
+    document.querySelectorAll(`[data-uid="${uid}"]`).forEach((el) => el.classList.toggle('selected', checked));
+  }
+
+  function toggleSelectAllVisible(event) {
+    const checked = event.target.checked;
+    visibleFilteredFiles().forEach((file) => {
+      if (checked) selectedUids.add(file.uid);
+      else selectedUids.delete(file.uid);
+    });
+    renderFiles();
+  }
+
+  function clearSelection() {
+    selectedUids.clear();
+    renderFiles();
+  }
+
+  function selectedUidArray() {
+    return Array.from(selectedUids);
+  }
+
+  function bulkDeleteSelected() {
+    const uids = selectedUidArray();
+    if (uids.length === 0) return;
+    showModal({
+      title: '선택 항목 삭제',
+      message: `${uids.length}개 항목을 휴지통으로 이동하시겠습니까?`,
+      isInput: false,
+      actionBtnText: t('delete'),
+      isDanger: true
+    }, () => {
+      postJson('/files/api/v1/bulk/delete/', { uids }).then(() => {
+        selectedUids.clear();
+        fetchFiles();
+      });
+    });
+  }
+
+  function bulkRestoreSelected() {
+    const uids = selectedUidArray();
+    if (uids.length === 0) return;
+    postJson('/files/api/v1/bulk/restore/', { uids }).then(() => {
+      selectedUids.clear();
+      fetchFiles();
+    });
+  }
+
+  function bulkMoveSelected() {
+    const uids = selectedUidArray();
+    if (uids.length === 0) return;
+    openMoveModal(uids, `${uids.length}개 항목`, '/files/api/v1/bulk/move/');
+  }
+
+  function openRagForSelected() {
+    const uids = selectedUidArray();
+    if (uids.length === 0) return;
+    window.location.href = `/files/rag/?nodes=${encodeURIComponent(uids.join(','))}`;
+  }
+
+  function postJson(url, payload) {
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken'),
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    }).then(res => res.json()).then(data => {
+      if (!data.ok) throw new Error((data.errors || ['요청 처리에 실패했습니다.']).join('\n'));
+      return data;
+    }).catch((error) => {
+      alert(error.message || '오류가 발생했습니다.');
+      throw error;
+    });
+  }
+
+  function retryAIProcessing(uid, event) {
+    if (event) event.stopPropagation();
+    postJson(`/files/api/v1/${uid}/ai/retry/`, {}).then(() => fetchFiles());
+  }
+
   function renderFiles() {
-    const isAI = document.getElementById('aiSearchToggle').checked;
-    if (isAI && document.getElementById('fileSearch').value.trim() !== '') {
+    if (searchMode === 'ai' && document.getElementById('fileSearch').value.trim() !== '') {
       // AI 모드이면서 타이핑이 된 상태면 일반 renderFiles는 중단 (AI가 덮어씌움)
       return;
     }
@@ -1288,33 +1997,10 @@
     const emptyState = document.getElementById('emptyState');
     const fileCount = document.getElementById('fileCount');
 
-    const searchQ = document.getElementById('fileSearch').value.toLowerCase();
-    const typeF = document.getElementById('typeFilter').value;
-    const sortF = document.getElementById('sortFilter').value;
+    let filtered = visibleFilteredFiles();
 
-    // 필터링
-    let filtered = allFiles.filter(f => {
-      if (searchQ && !(f.name && f.name.toLowerCase().includes(searchQ))) return false;
-      if (typeF) {
-        const type = f.node_type === 'directory' ? 'folder' : getFileIconType(f.name, f.mime_type);
-        if (type !== typeF) return false;
-      }
-      return true;
-    });
-
-    // 정렬
-    filtered.sort((a, b) => {
-      switch (sortF) {
-        case 'name_asc': return a.name.localeCompare(b.name);
-        case 'size_desc': return (b.size || 0) - (a.size || 0);
-        case 'date_asc': return new Date(a.created_at) - new Date(b.created_at);
-        case 'date_desc':
-        default:
-          return new Date(b.created_at) - new Date(a.created_at);
-      }
-    });
-
-    fileCount.textContent = `${filtered.length}개 파일`;
+    fileCount.textContent = t('fileCount', filtered.length);
+    updateBulkToolbar();
 
     if (filtered.length === 0) {
       gridView.style.display = 'none';
@@ -1338,12 +2024,18 @@
 
         const iconSrc = isDir ? getFolderIconSrc() : getFileIconSrc(file.name, file.mime_type);
 
-        const sizeStr = isDir ? '폴더' : formatBytes(file.size);
+        const sizeStr = isDir ? t('folder') : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
         const statusBadges = getFileStatusBadges(file);
+        const selected = selectedUids.has(file.uid);
+        const retryButton = isAIFailed(file) ? `
+          <button type="button" class="card-action-btn" onclick="retryAIProcessing('${file.uid}', event)">
+            ${t('retry')}
+          </button>` : '';
 
         const card = document.createElement('div');
-        card.className = 'file-card';
+        card.className = `file-card ${selected ? 'selected' : ''}`;
+        card.setAttribute('data-uid', file.uid);
         card.setAttribute('data-name', file.name.toLowerCase());
         card.setAttribute('draggable', 'true');
         card.setAttribute('ondragstart', `handleDragStart(event, '${file.uid}')`);
@@ -1357,6 +2049,7 @@
         const fileHref = `/files/${file.uid}/`;
 
         card.innerHTML = `
+          <input type="checkbox" class="select-box card-select" ${selected ? 'checked' : ''} onchange="toggleSelection('${file.uid}', this.checked, event)" onclick="event.stopPropagation()">
           <div class="card-top">
             <a href="${fileHref}" style="display:contents;">
               <div class="card-icon">
@@ -1369,7 +2062,7 @@
           </div>
 
           <a href="${fileHref}" class="card-body">
-            <p class="card-name">${file.name}</p>
+            <p class="card-name">${escapeHtml(file.name)}</p>
             <div class="card-meta">
               <span>${sizeStr}</span>
               <span>${dateStr}</span>
@@ -1382,12 +2075,13 @@
             ${!isDir ? `
             <a href="/files/api/v1/${file.uid}/download/" onclick="event.stopPropagation()" class="card-action-btn">
               <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              다운로드
+              ${t('download')}
             </a>` : `<div style="flex:1"></div>`}
+            ${retryButton}
             <form method="post" action="javascript:void(0);" onsubmit="deleteFile('${file.uid}', event)" style="flex:1;display:flex;">
               <button type="submit" class="card-action-btn danger">
                 <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
-                삭제
+                ${t('delete')}
               </button>
             </form>
           </div>
@@ -1408,11 +2102,18 @@
 
         const iconSrc2 = isDir ? getFolderIconSrc() : getFileIconSrc(file.name, file.mime_type);
 
-        const sizeStr = isDir ? '폴더' : formatBytes(file.size);
+        const sizeStr = isDir ? t('folder') : formatBytes(file.size);
         const dateStr = new Date(file.created_at).toLocaleDateString();
         const statusBadges = getFileStatusBadges(file, 'list');
+        const selected = selectedUids.has(file.uid);
+        const retryButton = isAIFailed(file) ? `
+          <button type="button" class="icon-btn retry" title="${t('retry')}" onclick="retryAIProcessing('${file.uid}', event)">
+            ↻
+          </button>` : '';
 
         const tr = document.createElement('tr');
+        tr.className = selected ? 'selected' : '';
+        tr.setAttribute('data-uid', file.uid);
         tr.setAttribute('data-name', file.name.toLowerCase());
         tr.setAttribute('draggable', 'true');
         tr.setAttribute('ondragstart', `handleDragStart(event, '${file.uid}')`);
@@ -1424,6 +2125,9 @@
         tr.setAttribute('oncontextmenu', `showContextMenu(event, '${file.uid}', ${isDir})`);
         tr.innerHTML = `
           <td style="padding-right:0;">
+            <input type="checkbox" class="select-box" ${selected ? 'checked' : ''} onchange="toggleSelection('${file.uid}', this.checked, event)" onclick="event.stopPropagation()">
+          </td>
+          <td style="padding-right:0;">
             <button type="button" class="icon-btn ${isStarred}" title="즐겨찾기" onclick="toggleStar('${file.uid}', event)">
               ${starIcon}
             </button>
@@ -1434,7 +2138,7 @@
                 <img src="${iconSrc2}" alt="icon" style="width:100%;height:100%;object-fit:contain;">
               </div>
               <div style="min-width:0;">
-                <span class="file-name-text">${file.name}</span>
+                <span class="file-name-text">${escapeHtml(file.name)}</span>
               </div>
             </a>
           </td>
@@ -1449,6 +2153,7 @@
                 <a href="/files/api/v1/${file.uid}/download/" onclick="event.stopPropagation()" class="icon-btn" title="다운로드">
                   <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </a>` : ''}
+                ${retryButton}
                 <form method="post" action="javascript:void(0);" onsubmit="deleteFile('${file.uid}', event)">
                   <button type="submit" class="icon-btn danger" title="삭제">
                     <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
@@ -1646,6 +2351,36 @@
     });
   }
 
+  function openMoveModal(uids, label, endpoint) {
+    fetch('/files/api/v1/folders/')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.ok) return;
+        const options = [{ value: "root", label: "📁 최상위 폴더" }];
+        data.folders.forEach(folder => {
+          if (!uids.includes(folder.uid)) {
+            options.push({ value: folder.uid, label: `└─ ${folder.path}` });
+          }
+        });
+
+        showModal({
+          title: '폴더 이동',
+          message: `${label}을(를) 이동할 폴더를 선택하세요.`,
+          isInput: false,
+          isSelect: true,
+          selectOptions: options,
+          actionBtnText: t('move'),
+          isDanger: false
+        }, (selectedFolderId) => {
+          if (!selectedFolderId) return;
+          postJson(endpoint, { uids, parent_id: selectedFolderId }).then(() => {
+            selectedUids.clear();
+            fetchFiles();
+          });
+        });
+      });
+  }
+
   function closeMenu() {
     const ctx = document.getElementById('contextMenu');
     ctx.classList.remove('show');
@@ -1705,47 +2440,7 @@
     if (activeContextUid) {
       const fileObj = allFiles.find(f => f.uid === activeContextUid);
       if (fileObj) {
-        // 폴더 목록 가져오기
-        fetch('/files/api/v1/folders/')
-          .then(res => res.json())
-          .then(data => {
-            if (data.ok) {
-              const options = [{ value: "root", label: "📁 최상위 폴더" }];
-              data.folders.forEach(folder => {
-                // 자기 자신 혹은 하위 폴더로는 보낼 권한이 없음, 단 API에서 걸러주므로 일단 모두 렌더링해도 되나 자기 자신은 제외
-                if (folder.uid !== activeContextUid) {
-                  options.push({ value: folder.uid, label: `└─ ${folder.path}` });
-                }
-              });
-
-              showModal({
-                title: '폴더 이동',
-                message: `'${fileObj.name}'을(를) 이동할 폴더를 선택하세요.`,
-                isInput: false,
-                isSelect: true,
-                selectOptions: options,
-                actionBtnText: '이동',
-                isDanger: false
-              }, (selectedFolderId) => {
-                if (selectedFolderId) {
-                  fetch(`/files/api/v1/${activeContextUid}/move/`, {
-                    method: 'POST',
-                    headers: {
-                      'X-CSRFToken': getCookie('csrftoken'),
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ parent_id: selectedFolderId })
-                  })
-                  .then(res => res.json())
-                  .then(mvData => {
-                    if (mvData.ok) fetchFiles();
-                    else alert(mvData.errors ? mvData.errors.join('\\n') : '이동에 실패했습니다.');
-                  })
-                  .catch(err => alert('오류가 발생했습니다.'));
-                }
-              });
-            }
-          });
+        openMoveModal([activeContextUid], `'${fileObj.name}'`, `/files/api/v1/${activeContextUid}/move/`);
       }
     }
     closeMenu();
@@ -1811,5 +2506,81 @@
     })
     .catch(err => alert('오류가 발생했습니다.'));
   }
+
+  // --- 최근 AI 검색 기록 불러오기 ---
+  window.ragHistoryData = [];
+  function openHistoryModal(index) {
+    const item = window.ragHistoryData[index];
+    if (!item) return;
+    document.getElementById('historyModalQ').textContent = item.question;
+    document.getElementById('historyModalDate').textContent = new Date(item.completed_at).toLocaleString();
+    document.getElementById('historyModalA').textContent = item.answer || '답변이 없습니다.';
+    
+    const citContainer = document.getElementById('historyModalCitations');
+    const citCount = document.getElementById('historyModalCitCount');
+    
+    if (item.citations && item.citations.length > 0) {
+      citCount.textContent = item.citations.length;
+      citContainer.innerHTML = item.citations.map((cit, i) => `
+        <div style="padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px;">
+          <div style="font-weight: 600; color: var(--accent); margin-bottom: 4px;">
+            [${i+1}] ${escapeHtml(cit.title || '출처 문서')} 
+            <span style="font-weight: normal; color: var(--muted); margin-left: 6px;">
+              ${cit.page ? 'Page ' + cit.page : ''}
+            </span>
+          </div>
+          <div style="color: var(--text); line-height: 1.5;">${escapeHtml(cit.text || '')}</div>
+        </div>
+      `).join('');
+    } else {
+      citCount.textContent = '0';
+      citContainer.innerHTML = '<div style="color: var(--muted); font-size: 12px;">등록된 참고 문서가 없습니다.</div>';
+    }
+    
+    const modal = document.getElementById('ragHistoryModal');
+    modal.style.display = 'flex';
+    // 강제 reflow를 발생시켜 애니메이션 트랜지션 적용
+    void modal.offsetWidth;
+    modal.classList.add('show');
+  }
+
+  function fetchRecentHistory() {
+    // Only show on root folder
+    if (currentFolderUid) {
+      document.getElementById('recentHistorySection').style.display = 'none';
+      return;
+    }
+    
+    fetch('/files/api/v1/ai/search-history/?limit=6')
+      .then(res => res.json())
+      .then(data => {
+        const section = document.getElementById('recentHistorySection');
+        const grid = document.getElementById('recentHistoryGrid');
+        if (data.ok && data.history && data.history.length > 0) {
+          window.ragHistoryData = data.history;
+          section.style.display = 'block';
+          grid.innerHTML = data.history.map((item, index) => `
+            <div class="recent-history-card" onclick="openHistoryModal(${index})">
+              <div class="history-q">Q. ${item.question}</div>
+              <div class="history-a">${item.answer_preview}</div>
+              <div class="history-meta">
+                <span>참고 문서 ${item.result_count}건</span>
+                <span>${new Date(item.completed_at).toLocaleDateString()}</span>
+              </div>
+            </div>
+          `).join('');
+        } else {
+          section.style.display = 'none';
+        }
+      })
+      .catch(err => console.error("History fetch error:", err));
+  }
+
+  // 초기 로드 시 기록 불러오기 (폴더 이동 시에도 호출 필요)
+  const originalFetchFiles = fetchFiles;
+  fetchFiles = function() {
+    originalFetchFiles();
+    fetchRecentHistory();
+  };
 </script>
 {% endblock %}

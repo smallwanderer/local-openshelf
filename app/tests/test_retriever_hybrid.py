@@ -236,13 +236,36 @@ def test_retriever_hybrid_reranks_by_sparse_score(monkeypatch):
         lambda self, vector: vector,
     )
 
+    compressor_calls = []
+
+    class FakeCompressor:
+        def compress_evidences(self, *, evidences, query_embedding, query_sparse):
+            compressor_calls.append(
+                {
+                    "evidence_count": len(evidences),
+                    "query_sparse": query_sparse,
+                }
+            )
+            for evidence in evidences:
+                evidence["compressed_text"] = f"compressed:{evidence['text']}"
+                evidence["compression"] = {"enabled": True, "method": "test"}
+            return evidences
+
+        def combine_evidence_texts(self, evidences):
+            return "\n\n".join(evidence["compressed_text"] for evidence in evidences), {
+                "enabled": True,
+                "method": "embedding_lazy_segment_document",
+            }
+
+    monkeypatch.setattr(retriever_module, "EmbeddingContextualCompressor", FakeCompressor)
+
     def fake_embedder(*args, **kwargs):
         return SimpleNamespace(
             dense_vector=[1.0, 0.0],
             sparse_vector={"999": 1.0},
         )
 
-    fake_embedding_module = types.SimpleNamespace(bge_m3_embedder=fake_embedder)
+    fake_embedding_module = types.SimpleNamespace(embed_query=fake_embedder)
     monkeypatch.setitem(
         sys.modules,
         "document_ai.embedding.embeding_models",
@@ -264,6 +287,11 @@ def test_retriever_hybrid_reranks_by_sparse_score(monkeypatch):
     assert results[0]["score_details"]["pooling_method"] == "normalized_logsumexp"
     assert results[0]["evidences"][0]["dense_score"] > 0
     assert results[0]["evidences"][0]["hybrid_score"] > 0
+    assert compressor_calls
+    assert results[0]["compressed_text"].startswith("compressed:")
+    assert results[0]["compression"]["method"] == "embedding_lazy_segment_document"
+    assert results[0]["evidences"][0]["compressed_text"].startswith("compressed:")
+    assert results[0]["evidences"][0]["compression"]["method"] == "test"
 
 
 def test_retriever_top_k_zero_returns_all_candidates(monkeypatch):
@@ -310,7 +338,7 @@ def test_retriever_top_k_zero_returns_all_candidates(monkeypatch):
     monkeypatch.setattr(VectorRetriever, "_get_distance_func", lambda self, vector: vector)
 
     fake_embedding_module = types.SimpleNamespace(
-        bge_m3_embedder=lambda *args, **kwargs: SimpleNamespace(
+        embed_query=lambda *args, **kwargs: SimpleNamespace(
             dense_vector=[1.0, 0.0],
             sparse_vector={"999": 1.0},
         )
@@ -368,7 +396,7 @@ def test_retriever_excludes_trashed_nodes(monkeypatch):
             sparse_vector={"999": 1.0},
         )
 
-    fake_embedding_module = types.SimpleNamespace(bge_m3_embedder=fake_embedder)
+    fake_embedding_module = types.SimpleNamespace(embed_query=fake_embedder)
     monkeypatch.setitem(sys.modules, "document_ai.embedding.embeding_models", fake_embedding_module)
 
     retriever = VectorRetriever()
@@ -445,7 +473,7 @@ def test_retriever_normalizes_evidence_text(monkeypatch):
             sparse_vector={"999": 1.0},
         )
 
-    fake_embedding_module = types.SimpleNamespace(bge_m3_embedder=fake_embedder)
+    fake_embedding_module = types.SimpleNamespace(embed_query=fake_embedder)
     monkeypatch.setitem(
         sys.modules,
         "document_ai.embedding.embeding_models",

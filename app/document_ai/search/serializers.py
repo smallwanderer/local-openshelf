@@ -1,6 +1,7 @@
 from rest_framework import serializers
+from django.conf import settings
 
-from document_ai.models import SearchJob
+from document_ai.models import RAGJob, SearchJob
 
 class VectorSearchRequestSerializer(serializers.Serializer):
     query = serializers.CharField(
@@ -27,6 +28,8 @@ class EvidenceSerializer(serializers.Serializer):
     chunk_id = serializers.IntegerField()
     text = serializers.CharField()
     context_text = serializers.CharField()
+    compressed_text = serializers.CharField(required=False, allow_blank=True)
+    compression = serializers.DictField(required=False)
     section = serializers.CharField(allow_blank=True)
     pages = serializers.CharField()
     distance = serializers.FloatField()
@@ -67,6 +70,8 @@ class VectorSearchResponseSerializer(serializers.Serializer):
     node_name = serializers.CharField()
     file_ext = serializers.CharField()
     doc_score = serializers.FloatField()
+    compressed_text = serializers.CharField(required=False, allow_blank=True)
+    compression = serializers.DictField(required=False)
     score_details = ScoreDetailsSerializer(required=False)
     evidences = serializers.ListField(child=EvidenceSerializer())
 
@@ -112,3 +117,57 @@ class VectorTuningRequestSerializer(serializers.Serializer):
     pool_tau = serializers.FloatField(required=False, min_value=0.1)
     doc_length_penalty_alpha = serializers.FloatField(required=False, min_value=0.0)
     evidence_context_window = serializers.IntegerField(required=False, min_value=0)
+
+
+class RAGRequestSerializer(serializers.Serializer):
+    question = serializers.CharField(required=True)
+    top_k = serializers.IntegerField(default=getattr(settings, "RAG_SEARCH_TOP_K", 3), min_value=1, max_value=10)
+    threshold = serializers.FloatField(required=False, min_value=0.0)
+    language = serializers.ChoiceField(choices=["ko", "en"], default="ko")
+    node_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        help_text="특정 파일 또는 폴더(Node) 범위에서만 RAG 답변을 생성할 경우 ID 리스트",
+    )
+
+
+class RAGJobCreateResponseSerializer(serializers.Serializer):
+    job_id = serializers.IntegerField()
+    search_job_id = serializers.IntegerField()
+    status = serializers.CharField()
+    poll_url = serializers.CharField()
+
+
+class RAGJobSerializer(serializers.ModelSerializer):
+    search_status = serializers.SerializerMethodField()
+    search_results = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RAGJob
+        fields = [
+            "id",
+            "question",
+            "top_k",
+            "language",
+            "node_ids",
+            "status",
+            "task_id",
+            "answer",
+            "citations",
+            "error_message",
+            "search_job",
+            "search_status",
+            "search_results",
+            "created_at",
+            "started_at",
+            "completed_at",
+            "updated_at",
+        ]
+
+    def get_search_status(self, obj):
+        return obj.search_job.status if obj.search_job_id else None
+
+    def get_search_results(self, obj):
+        if obj.search_job_id and obj.search_job.status == "completed":
+            return obj.search_job.results
+        return []

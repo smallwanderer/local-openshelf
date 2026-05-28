@@ -10,6 +10,7 @@ from config.enums import AIStatus
 from document_ai.models import ChunkEmbedding, DocumentChunk
 from document_ai.parsers.config import get_embedding_backend
 from document_ai.parsers.text_utils import normalize_extracted_text
+from document_ai.search.compression import EmbeddingContextualCompressor
 
 logger = logging.getLogger(__name__)
 
@@ -280,9 +281,9 @@ class VectorRetriever:
             return []
 
         try:
-            from document_ai.embedding.embeding_models import bge_m3_embedder
+            from document_ai.embedding.embeding_models import embed_query
 
-            query_embedding = bge_m3_embedder(
+            query_embedding = embed_query(
                 query,
                 model_name=self.model_name,
                 backend=query_backend,
@@ -295,6 +296,7 @@ class VectorRetriever:
             query_embedding.sparse_vector or {},
             self.query_sparse_top_n,
         )
+        contextual_compressor = EmbeddingContextualCompressor()
         query_dense_norm = _l2_norm(query_embedding.dense_vector)
         query_sparse_norm = _l2_norm(pruned_query_sparse.values())
 
@@ -440,6 +442,7 @@ class VectorRetriever:
                 chunk = item["embedding"].chunk
                 evidence = {
                     "chunk_id": chunk.id,
+                    "_chunk": chunk,
                     "text": normalize_extracted_text(chunk.text or ""),
                     "context_text": self._build_context_text(chunk),
                     "section": chunk.section_title or "",
@@ -456,6 +459,15 @@ class VectorRetriever:
                     "score_checks": item["score_checks"],
                 }
                 evidences.append(evidence)
+
+            evidences = contextual_compressor.compress_evidences(
+                evidences=evidences,
+                query_embedding=query_embedding,
+                query_sparse=pruned_query_sparse,
+            )
+            for evidence in evidences:
+                evidence.pop("_chunk", None)
+            document_compressed_text, document_compression = contextual_compressor.combine_evidence_texts(evidences)
 
             meta_chunk = evidence_hits[0]["embedding"].chunk.parse_result
             score_details = {
@@ -487,6 +499,8 @@ class VectorRetriever:
                     "node_name": meta_chunk.node.name,
                     "file_ext": meta_chunk.metadata.get("file_ext", ""),
                     "doc_score": doc_score,
+                    "compressed_text": document_compressed_text,
+                    "compression": document_compression,
                     "score_details": score_details,
                     "evidences": evidences,
                 }

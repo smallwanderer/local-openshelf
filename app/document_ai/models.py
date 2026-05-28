@@ -70,6 +70,10 @@ class DocumentParseResult(models.Model):
     # Optional Debug / Reproducibility Metadata
     metadata = models.JSONField(default=dict, blank=True)
 
+    # AI Summary and Tags
+    summary = models.TextField(blank=True, default="")
+    auto_tags = models.JSONField(default=list, blank=True)
+
     # Management Fields
     parsed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -112,6 +116,8 @@ class DocumentParseResult(models.Model):
             "timings": self.timings,
             "errors": self.errors,
             "metadata": self.metadata,
+            "summary": self.summary,
+            "auto_tags": self.auto_tags,
             "parsed_at": self.parsed_at.isoformat() if self.parsed_at else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -254,6 +260,88 @@ class ChunkEmbedding(models.Model):
         }
 
 
+class ChunkSentenceEmbedding(models.Model):
+    """
+    DocumentChunk를 문장 단위로 쪼개어 각각의 임베딩 벡터를 저장하는 모델
+    """
+    chunk = models.ForeignKey(
+        "document_ai.DocumentChunk",
+        on_delete=models.CASCADE,
+        related_name="sentence_embeddings",
+    )
+    sentence_index = models.PositiveIntegerField()
+    text = models.TextField()
+    token_count = models.PositiveIntegerField(null=True, blank=True)
+    
+    # dimensions=1024 for BGE-M3 dense embedding
+    vector = VectorField(dimensions=1024, null=True, blank=True)
+    sparse_vector = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chunk", "sentence_index"],
+                name="uniq_sentence_emb_per_chunk_index",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["chunk", "sentence_index"]),
+            HnswIndex(
+                name='sent_emb_vec_hnsw_idx',
+                fields=['vector'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops']
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.chunk.parse_result.node.name} - Chunk {self.chunk.chunk_index} - Sentence {self.sentence_index}"
+
+
+class ChunkSegmentEmbedding(models.Model):
+    """
+    검색/RAG contextual compression에서 lazy 생성하는 segment embedding.
+    chunk embedding과 동일한 임베딩 정책을 사용하므로 별도 모델 식별자는 저장하지 않는다.
+    """
+
+    chunk = models.ForeignKey(
+        "document_ai.DocumentChunk",
+        on_delete=models.CASCADE,
+        related_name="segment_embeddings",
+    )
+    window_size = models.PositiveSmallIntegerField(default=2)
+    segment_index = models.PositiveIntegerField()
+    text = models.TextField()
+    char_start = models.PositiveIntegerField(default=0)
+    char_end = models.PositiveIntegerField(default=0)
+
+    vector = VectorField(dimensions=1024, null=True, blank=True)
+    sparse_vector = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["chunk", "window_size", "segment_index"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chunk", "window_size", "segment_index"],
+                name="uniq_segment_emb_per_chunk_window_index",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["chunk", "window_size", "segment_index"]),
+            models.Index(fields=["last_used_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.chunk_id} - Segment {self.segment_index} (w={self.window_size})"
+
+
 class SearchJob(models.Model):
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -290,3 +378,48 @@ class SearchJob(models.Model):
 
     def __str__(self):
         return f"SearchJob({self.id}) {self.status}: {self.query[:40]}"
+
+
+class RAGJob(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="document_ai_rag_jobs",
+    )
+    search_job = models.ForeignKey(
+        "document_ai.SearchJob",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rag_jobs",
+    )
+
+    question = models.TextField()
+    top_k = models.PositiveIntegerField(default=5)
+    language = models.CharField(max_length=8, default="ko")
+    node_ids = models.JSONField(default=list, blank=True)
+
+    status = models.CharField(
+        max_length=32,
+        choices=AIStatus.choices,
+        default=AIStatus.PENDING,
+        db_index=True,
+    )
+    task_id = models.CharField(max_length=255, blank=True)
+    answer = models.TextField(blank=True)
+    citations = models.JSONField(default=list, blank=True)
+    error_message = models.TextField(blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner", "status", "-created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"RAGJob({self.id}) {self.status}: {self.question[:40]}"

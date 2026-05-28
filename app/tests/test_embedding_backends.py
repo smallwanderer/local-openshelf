@@ -56,6 +56,34 @@ def test_embedder_dispatches_to_bgem3_hybrid(monkeypatch):
     assert result.sparse_vector == {"101": 0.7}
 
 
+def test_document_and_query_entrypoints_share_embedder_policy(monkeypatch):
+    calls = []
+
+    def fake_embedder(**kwargs):
+        calls.append(kwargs)
+        return EmbeddingResult(dense_vector=[1.0], sparse_vector={})
+
+    monkeypatch.setattr(embeding_models, "bge_m3_embedder", fake_embedder)
+    settings.QUERY_EMBEDDING_MAX_TOKENS = 64
+
+    embeding_models.embed_document(
+        text="document chunk",
+        model_name="dummy-model",
+        backend="bgem3_hybrid",
+        max_length=128,
+    )
+    embeding_models.embed_query(
+        query="query",
+        model_name="dummy-model",
+        backend="bgem3_hybrid",
+    )
+
+    assert calls[0]["text"] == "document chunk"
+    assert calls[0]["max_length"] == 128
+    assert calls[1]["text"] == "query"
+    assert calls[1]["max_length"] == 64
+
+
 def test_sparse_vector_is_l2_normalized():
     normalized = embeding_models._normalize_sparse_vector(
         {"10": 3.0, "20": 4.0}

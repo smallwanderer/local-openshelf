@@ -98,6 +98,48 @@ services:
         condition: service_started
     command: [ "bash", "-lc", "celery -A config worker -l info -Q search --concurrency=$${SEARCH_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
 
+  celery-query-worker:
+    build:
+      context: ./app
+      args:
+        INSTALL_AI_DEPS: "0"
+    container_name: celery-query-worker
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      llm-parser:
+        condition: service_started
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q query --concurrency=$${QUERY_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+
+  celery-llm-rag-worker:
+    build:
+      context: ./app
+      args:
+        INSTALL_AI_DEPS: "0"
+    container_name: celery-llm-rag-worker
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data/uploads:/data/uploads
+      - ./data/logs:/data/logs
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      llm-parser:
+        condition: service_started
+    command: [ "bash", "-lc", "celery -A config worker -l info -Q rag --concurrency=$${RAG_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+
   celery-text2sql-worker:
     build:
       context: ./app
