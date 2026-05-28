@@ -53,3 +53,7 @@ app/tmp_*.js
 task.md
 implementation_plan.md
 walkthrough.md
+!WALKTHROUGH.md
+AGENTS.md
+codex_context_backup.md
+scratchpad.py
