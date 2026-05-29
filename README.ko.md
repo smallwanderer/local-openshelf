@@ -2,6 +2,14 @@
 
 **OpenShelf는 개인 또는 소규모 팀이 직접 운영할 수 있는 가벼운 문서 검색 및 RAG 시스템입니다.**
 
+<p align="center">
+ <img src = "https://github.com/user-attachments/assets/263cba6d-04f6-49ba-9ccb-85481157539a", width="80%">
+</p>
+
+<p align="center">
+ <img src = "https://github.com/user-attachments/assets/d240cf34-1dfb-462e-8366-3f0d3e4a435f", width="80%">
+</p>
+
 파일 저장소, 문서 파싱, 하이브리드 벡터 검색, RAG 답변 생성을 하나의 Docker Compose 환경에서 실행할 수 있도록 구성되어 있습니다. 서버에서도 실행할 수 있고, Windows에서는 Docker Desktop과 WSL2 기반으로 실행할 수 있습니다.
 
 영문 문서는 [README.md](README.md), 단계별 실행 가이드는 [WALKTHROUGH.md](WALKTHROUGH.md)를 참고하세요.
