@@ -77,10 +77,11 @@ def move_to_trash(node):
     deleted_at = timezone.now()
     _subtree_queryset(node).update(
         trashed=True,
+        ai_processing_enabled=False,
         deleted_at=deleted_at,
         updated_at=deleted_at,
     )
-    node.refresh_from_db(fields=["trashed", "deleted_at", "updated_at"])
+    node.refresh_from_db(fields=["trashed", "ai_processing_enabled", "deleted_at", "updated_at"])
     return node
 
 def get_recent_files(user, limit=20):

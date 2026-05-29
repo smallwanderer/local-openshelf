@@ -10,6 +10,8 @@ from django.utils import timezone
 from config.enums import AIStatus, NodeType
 from document_ai.models import ChunkEmbedding, DocumentChunk, DocumentParseResult
 from document_ai.tasks import (
+    embedding_document_with_bge,
+    enqueue_embedding_tasks,
     _get_embedding_recovery_chunk_ids,
     _get_node_ids_for_chunks,
     _get_parse_recovery_node_ids,
@@ -147,6 +149,54 @@ class DocumentPipelineRecoveryTests(TestCase):
         self.assertIn(stale_pending.id, chunk_ids)
         self.assertIn(stale_failed.id, chunk_ids)
         self.assertNotIn(completed_chunk.id, chunk_ids)
+
+    def test_enqueue_embedding_tasks_skips_ai_disabled_node(self):
+        node = self._create_file_node("ai-disabled-queue.txt")
+        node.ai_processing_enabled = False
+        node.save(update_fields=["ai_processing_enabled"])
+        parse_result = DocumentParseResult.objects.create(
+            node=node,
+            status=AIStatus.COMPLETED,
+            chunk_count=1,
+        )
+        chunk = DocumentChunk.objects.create(
+            parse_result=parse_result,
+            chunk_index=0,
+            text="pending chunk",
+            status=AIStatus.PENDING,
+        )
+
+        with patch("document_ai.tasks.embedding_document_with_bge.apply_async") as apply_async:
+            result = enqueue_embedding_tasks(node.id)
+
+        chunk.refresh_from_db()
+        apply_async.assert_not_called()
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(chunk.status, AIStatus.PENDING)
+
+    def test_embedding_task_skips_ai_disabled_node_before_model_call(self):
+        node = self._create_file_node("ai-disabled-embed.txt")
+        node.ai_processing_enabled = False
+        node.save(update_fields=["ai_processing_enabled"])
+        parse_result = DocumentParseResult.objects.create(
+            node=node,
+            status=AIStatus.COMPLETED,
+            chunk_count=1,
+        )
+        chunk = DocumentChunk.objects.create(
+            parse_result=parse_result,
+            chunk_index=0,
+            text="processing chunk",
+            status=AIStatus.PROCESSING,
+        )
+
+        with patch("document_ai.embedding.embeding_models.embed_document") as embed_document:
+            result = embedding_document_with_bge.run(chunk.id)
+
+        chunk.refresh_from_db()
+        embed_document.assert_not_called()
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(chunk.status, AIStatus.PENDING)
 
     def test_recovery_task_requeues_parse_and_embedding_work(self):
         parse_node = self._create_file_node("parse-me.txt")

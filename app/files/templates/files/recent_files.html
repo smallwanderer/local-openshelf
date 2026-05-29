@@ -5,7 +5,7 @@
 {% block files_body %}
 
 <div class="section-header">
-  <h2>최근 파일</h2>
+  <h2 data-i18n="recentTitle">최근 파일</h2>
   <span class="meta-text" id="fileCount">최근 7일 · 0개</span>
 </div>
 
@@ -13,10 +13,10 @@
   <table class="file-table">
     <thead>
       <tr>
-        <th>이름</th>
-        <th>형식</th>
-        <th>크기</th>
-        <th>업로드 날짜</th>
+        <th data-i18n="name">이름</th>
+        <th data-i18n="type">형식</th>
+        <th data-i18n="size">크기</th>
+        <th data-i18n="uploadedDate">업로드 날짜</th>
         <th></th>
       </tr>
     </thead>
@@ -26,16 +26,53 @@
 
 <div class="empty-state" id="emptyState" style="display:none;">
   <div class="empty-state-icon">🕐</div>
-  <h3>최근 파일이 없습니다</h3>
-  <p>최근 7일 내에 업로드된 파일이 없습니다</p>
-  <a href="{% url 'files:page_upload' %}" class="btn btn-primary">파일 업로드</a>
+  <h3 data-i18n="noRecentTitle">최근 파일이 없습니다</h3>
+  <p data-i18n="noRecentBody">최근 7일 내에 업로드된 파일이 없습니다</p>
+  <a href="{% url 'files:page_upload' %}" class="btn btn-primary" data-i18n="upload">파일 업로드</a>
 </div>
 
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register({
+      ko: {
+        recentTitle: '최근 파일',
+        name: '이름',
+        type: '형식',
+        size: '크기',
+        uploadedDate: '업로드 날짜',
+        noRecentTitle: '최근 파일이 없습니다',
+        noRecentBody: '최근 7일 내에 업로드된 파일이 없습니다',
+        upload: '파일 업로드',
+        recentCount: count => `최근 7일 · ${count}개`,
+        file: '파일',
+        folder: '폴더',
+        download: '다운로드',
+      },
+      en: {
+        recentTitle: 'Recent files',
+        name: 'Name',
+        type: 'Type',
+        size: 'Size',
+        uploadedDate: 'Uploaded date',
+        noRecentTitle: 'No recent files',
+        noRecentBody: 'No files were uploaded in the last 7 days.',
+        upload: 'Upload files',
+        recentCount: count => `Last 7 days · ${count}`,
+        file: 'File',
+        folder: 'Folder',
+        download: 'Download',
+      },
+    });
+  }
+  function t(key, ...args) {
+    return window.OpenShelfI18n ? window.OpenShelfI18n.t(key, ...args) : key;
+  }
+
   document.addEventListener("DOMContentLoaded", fetchRecent);
+  document.addEventListener('openshelf:languagechange', fetchRecent);
 
   function fetchRecent() {
     fetch('/files/api/v1/recent/')
@@ -46,7 +83,7 @@
   }
 
   function renderTable(files) {
-    document.getElementById('fileCount').textContent = `최근 7일 · ${files.length}개`;
+    document.getElementById('fileCount').textContent = t('recentCount', files.length);
     const tbody = document.getElementById('fileTbody');
     const wrap = document.getElementById('tableWrap');
     const empty = document.getElementById('emptyState');
@@ -70,12 +107,12 @@
             <span class="file-name-text">${f.name}</span>
           </div>
         </td>
-        <td class="meta-text">${isFile ? '파일' : '폴더'}</td>
+        <td class="meta-text">${isFile ? t('file') : t('folder')}</td>
         <td class="meta-text">${f.size_mb ? f.size_mb + ' MB' : '-'}</td>
         <td class="meta-text">${new Date(f.created_at).toLocaleDateString()}</td>
         <td>
           <div class="file-actions">
-            ${isFile ? `<a href="/files/api/v1/${f.uid}/download/" class="icon-btn" title="다운로드" download>
+            ${isFile ? `<a href="/files/api/v1/${f.uid}/download/" class="icon-btn" title="${t('download')}" download>
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
               </svg>

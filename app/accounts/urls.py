@@ -10,4 +10,5 @@ urlpatterns = [
     path("verification-required/", views.verification_required_view, name="verification_required"),
     path("login/", views.SigninView.as_view(), name="login"),
     path("logout/", views.SignoutView.as_view(), name="logout"),
+    path("settings/", views.settings_view, name="settings"),
 ]

@@ -5,7 +5,7 @@
 {% block files_body %}
 
 <div class="section-header">
-  <h2>즐겨찾기</h2>
+  <h2 data-i18n="starredTitle">즐겨찾기</h2>
   <span class="meta-text" id="fileCount">0개 파일</span>
 </div>
 
@@ -13,10 +13,10 @@
   <table class="file-table">
     <thead>
       <tr>
-        <th>이름</th>
-        <th>형식</th>
-        <th>크기</th>
-        <th>업로드 날짜</th>
+        <th data-i18n="name">이름</th>
+        <th data-i18n="type">형식</th>
+        <th data-i18n="size">크기</th>
+        <th data-i18n="uploadedDate">업로드 날짜</th>
         <th></th>
       </tr>
     </thead>
@@ -26,15 +26,52 @@
 
 <div class="empty-state" id="emptyState" style="display:none;">
   <div class="empty-state-icon">⭐</div>
-  <h3>즐겨찾기한 파일이 없습니다</h3>
-  <p>파일 목록에서 ⭐ 버튼을 눌러 즐겨찾기에 추가하세요</p>
-  <a href="{% url 'files:index' %}" class="btn btn-primary">파일 목록으로</a>
+  <h3 data-i18n="noStarredTitle">즐겨찾기한 파일이 없습니다</h3>
+  <p data-i18n="noStarredBody">파일 목록에서 ⭐ 버튼을 눌러 즐겨찾기에 추가하세요</p>
+  <a href="{% url 'files:index' %}" class="btn btn-primary" data-i18n="backToFileList">파일 목록으로</a>
 </div>
 
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register({
+      ko: {
+        starredTitle: '즐겨찾기',
+        name: '이름',
+        type: '형식',
+        size: '크기',
+        uploadedDate: '업로드 날짜',
+        noStarredTitle: '즐겨찾기한 파일이 없습니다',
+        noStarredBody: '파일 목록에서 ⭐ 버튼을 눌러 즐겨찾기에 추가하세요',
+        backToFileList: '파일 목록으로',
+        fileCount: count => `${count}개 파일`,
+        file: '파일',
+        folder: '폴더',
+        unstar: '즐겨찾기 해제',
+        download: '다운로드',
+      },
+      en: {
+        starredTitle: 'Starred',
+        name: 'Name',
+        type: 'Type',
+        size: 'Size',
+        uploadedDate: 'Uploaded date',
+        noStarredTitle: 'No starred files',
+        noStarredBody: 'Use the star button in the file list to add favorites.',
+        backToFileList: 'Back to files',
+        fileCount: count => `${count} files`,
+        file: 'File',
+        folder: 'Folder',
+        unstar: 'Unstar',
+        download: 'Download',
+      },
+    });
+  }
+  function t(key, ...args) {
+    return window.OpenShelfI18n ? window.OpenShelfI18n.t(key, ...args) : key;
+  }
   function getCookie(name) {
       let cookieValue = null;
       if (document.cookie && document.cookie !== '') {
@@ -51,6 +88,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", fetchStarred);
+  document.addEventListener('openshelf:languagechange', fetchStarred);
 
   function fetchStarred() {
     fetch('/files/api/v1/starred/')
@@ -61,7 +99,7 @@
   }
 
   function renderTable(files) {
-    document.getElementById('fileCount').textContent = `${files.length}개 파일`;
+    document.getElementById('fileCount').textContent = t('fileCount', files.length);
     const tbody = document.getElementById('fileTbody');
     const wrap = document.getElementById('tableWrap');
     const empty = document.getElementById('emptyState');
@@ -85,13 +123,13 @@
             <span class="file-name-text">${f.name}</span>
           </div>
         </td>
-        <td class="meta-text">${isFile ? '파일' : '폴더'}</td>
+        <td class="meta-text">${isFile ? t('file') : t('folder')}</td>
         <td class="meta-text">${f.size_mb ? f.size_mb + ' MB' : '-'}</td>
         <td class="meta-text">${new Date(f.created_at).toLocaleDateString()}</td>
         <td>
           <div class="file-actions">
-            <button onclick="toggleStar('${f.uid}', event)" class="icon-btn star-btn starred" title="즐겨찾기 해제" style="border:none;background:none;cursor:pointer;">⭐</button>
-            ${isFile ? `<a href="/files/api/v1/${f.uid}/download/" class="icon-btn" title="다운로드" download>
+            <button onclick="toggleStar('${f.uid}', event)" class="icon-btn star-btn starred" title="${t('unstar')}" style="border:none;background:none;cursor:pointer;">⭐</button>
+            ${isFile ? `<a href="/files/api/v1/${f.uid}/download/" class="icon-btn" title="${t('download')}" download>
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
               </svg>

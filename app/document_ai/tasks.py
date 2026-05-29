@@ -138,6 +138,7 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
         .filter(
             node_type="file",
             trashed=False,
+            ai_processing_enabled=True,
             blob__isnull=False,
         )
         .filter(
@@ -163,6 +164,7 @@ def _get_parse_recovery_node_ids(limit: int) -> list[int]:
     )
     chunk_gap_ids = DocumentParseResult.objects.filter(
         node__trashed=False,
+        node__ai_processing_enabled=True,
         node__blob__isnull=False,
         status=AIStatus.COMPLETED,
         updated_at__lte=cutoff,
@@ -194,7 +196,7 @@ def _get_embedding_recovery_chunk_ids(limit: int) -> list[int]:
             has_completed_embedding=Exists(existing_embedding_qs),
         )
         .filter(
-            parse_result__node__trashed=False,
+            parse_result__node__ai_processing_enabled=True,
             parse_result__status=AIStatus.COMPLETED,
             recovery_attempts__lt=max_attempts,
         )
@@ -466,6 +468,13 @@ def parse_document_with_docling(node_id: int) -> dict:
         node = Node.objects.select_related("blob").get(pk=node_id)
         if node.node_type != "file":
             raise ValueError(f"Node {node_id} is not a file")
+        if not node.ai_processing_enabled:
+            logger.info("Parse skipped: node_id=%s, reason=ai_processing_disabled", node_id)
+            return {
+                "status": "skipped",
+                "node_id": node_id,
+                "message": "AI processing is disabled",
+            }
         if not hasattr(node, "blob") or not node.blob.file:
             raise ValueError(f"Node {node_id} has no attached file blob")
 
@@ -475,6 +484,15 @@ def parse_document_with_docling(node_id: int) -> dict:
 
         # 1. 파서 호출 (순수 Pydantic 결과)
         parse_result = parse_document_entry(file_path)
+
+        node.refresh_from_db(fields=["ai_processing_enabled"])
+        if not node.ai_processing_enabled:
+            logger.info("Parse result discarded: node_id=%s, reason=ai_processing_disabled_after_parse", node_id)
+            return {
+                "status": "skipped",
+                "node_id": node_id,
+                "message": "AI processing was disabled during parsing",
+            }
 
         # 2. DB 저장 (Pydantic → ORM 매핑)
         doc_result = save_parse_result(node, parse_result)
@@ -536,11 +554,23 @@ def enqueue_embedding_tasks(node_id: int) -> dict:
 
     try:
         with transaction.atomic():
+            from files.models import Node
+
+            if not Node.objects.filter(pk=node_id, ai_processing_enabled=True).exists():
+                logger.info("Embedding queue skipped: node_id=%s, reason=ai_processing_disabled_or_missing", node_id)
+                return {
+                    "status": "skipped",
+                    "node_id": node_id,
+                    "chunk_count": 0,
+                    "message": "AI processing is disabled or node is missing",
+                }
+
             chunk_ids = list(
                 DocumentChunk.objects
                 .select_for_update(skip_locked=True)
                 .filter(
                     parse_result__node_id=node_id,
+                    parse_result__node__ai_processing_enabled=True,
                     status=AIStatus.PENDING,
                 )
                 .values_list("id", flat=True)
@@ -598,13 +628,30 @@ def embedding_document_with_bge(self, chunk_id: int) -> dict:
     embedding_backend = get_embedding_backend()
 
     try:
-        chunk = DocumentChunk.objects.get(pk=chunk_id)
+        chunk = DocumentChunk.objects.select_related("parse_result__node").get(pk=chunk_id)
     except DocumentChunk.DoesNotExist:
         logger.error("Chunk %s not found", chunk_id)
         return {
             "status": "failed",
             "chunk_id": chunk_id,
             "error": f"Chunk {chunk_id} not found",
+        }
+
+    if not chunk.parse_result.node.ai_processing_enabled:
+        logger.info(
+            "Embedding skipped: chunk_id=%s, node_id=%s, reason=ai_processing_disabled",
+            chunk_id,
+            chunk.parse_result.node_id,
+        )
+        if chunk.status == AIStatus.PROCESSING:
+            chunk.status = AIStatus.PENDING
+            chunk.error_message = {}
+            chunk.save(update_fields=["status", "error_message"])
+        return {
+            "status": "skipped",
+            "chunk_id": chunk_id,
+            "node_id": chunk.parse_result.node_id,
+            "message": "AI processing is disabled",
         }
 
     if chunk.status != AIStatus.PROCESSING:

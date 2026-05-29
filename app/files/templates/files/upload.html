@@ -137,25 +137,25 @@
 {% block files_body %}
 
 <div class="section-header">
-  <h2>파일 업로드</h2>
+  <h2 data-i18n="uploadTitle">파일 업로드</h2>
 </div>
 
 <!-- 드래그 앤 드롭 존 -->
 <div class="upload-zone" id="uploadZone">
   <div class="upload-zone-icon">☁️</div>
-  <h3>파일을 여기에 끌어다 놓으세요</h3>
-  <p>또는 버튼을 클릭하여 파일을 선택하세요</p>
+  <h3 data-i18n="uploadDropTitle">파일을 여기에 끌어다 놓으세요</h3>
+  <p data-i18n="uploadDropBody">또는 버튼을 클릭하여 파일을 선택하세요</p>
   <label class="btn btn-primary" style="cursor:pointer;">
-    파일 선택
+    <span data-i18n="selectFiles">파일 선택</span>
     <input type="file" id="fileInput" multiple>
   </label>
 </div>
 
 <!-- 제한 안내 -->
 <div class="upload-limits">
-  <span>최대 파일 크기: 100MB</span>
-  <span>지원 형식: PDF, 이미지, 문서, 기타</span>
-  <span>복수 파일 동시 업로드 가능</span>
+  <span data-i18n="maxFileSize">최대 파일 크기: 100MB</span>
+  <span data-i18n="supportedTypes">지원 형식: PDF, 이미지, 문서, 기타</span>
+  <span data-i18n="multiUpload">복수 파일 동시 업로드 가능</span>
 </div>
 
 <!-- 업로드 대기 목록 -->
@@ -163,14 +163,47 @@
 
 <!-- 액션 버튼 -->
 <div class="upload-actions" id="uploadActions" style="display:none;">
-  <button class="btn btn-ghost" id="clearBtn">모두 지우기</button>
-  <button class="btn btn-primary" id="startUploadBtn">업로드 시작</button>
+  <button class="btn btn-ghost" id="clearBtn" data-i18n="clearAll">모두 지우기</button>
+  <button class="btn btn-primary" id="startUploadBtn" data-i18n="startUpload">업로드 시작</button>
 </div>
 
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register({
+      ko: {
+        uploadTitle: '파일 업로드',
+        uploadDropTitle: '파일을 여기에 끌어다 놓으세요',
+        uploadDropBody: '또는 버튼을 클릭하여 파일을 선택하세요',
+        selectFiles: '파일 선택',
+        maxFileSize: '최대 파일 크기: 100MB',
+        supportedTypes: '지원 형식: PDF, 이미지, 문서, 기타',
+        multiUpload: '복수 파일 동시 업로드 가능',
+        clearAll: '모두 지우기',
+        startUpload: '업로드 시작',
+        waiting: '대기 중',
+        remove: '제거',
+      },
+      en: {
+        uploadTitle: 'Upload files',
+        uploadDropTitle: 'Drop files here',
+        uploadDropBody: 'Or click the button to choose files',
+        selectFiles: 'Choose files',
+        maxFileSize: 'Maximum file size: 100MB',
+        supportedTypes: 'Supported types: PDF, images, documents, other',
+        multiUpload: 'Multiple files can be uploaded at once',
+        clearAll: 'Clear all',
+        startUpload: 'Start upload',
+        waiting: 'Waiting',
+        remove: 'Remove',
+      },
+    });
+  }
+  function t(key, ...args) {
+    return window.OpenShelfI18n ? window.OpenShelfI18n.t(key, ...args) : key;
+  }
   const zone    = document.getElementById('uploadZone');
   const input   = document.getElementById('fileInput');
   const queue   = document.getElementById('uploadQueue');
@@ -179,6 +212,7 @@
   const startBtn = document.getElementById('startUploadBtn');
 
   let files = [];
+  document.addEventListener('openshelf:languagechange', renderQueue);
 
   function getIcon(name) {
     const ext = name.split('.').pop().toLowerCase();
@@ -214,8 +248,8 @@
           <div class="upload-item-meta">${formatSize(f.size)}</div>
           <div class="progress-bar"><div class="progress-fill" id="progress-${i}"></div></div>
         </div>
-        <span class="status-badge status-waiting" id="status-${i}">대기 중</span>
-        <button class="remove-btn" data-index="${i}" title="제거">
+        <span class="status-badge status-waiting" id="status-${i}">${t('waiting')}</span>
+        <button class="remove-btn" data-index="${i}" title="${t('remove')}">
           <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       `;

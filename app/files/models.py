@@ -38,6 +38,7 @@ class Node(models.Model):
 
     starred = models.BooleanField(default=False)
     trashed = models.BooleanField(default=False)
+    ai_processing_enabled = models.BooleanField(default=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -306,6 +307,7 @@ class Node(models.Model):
             "status": None,
             "starred": self.starred,
             "trashed": self.trashed,
+            "ai_processing_enabled": self.ai_processing_enabled,
             "deleted_at": self.deleted_at.isoformat() if self.deleted_at else None,
             "restore_until": self.trash_expires_at.isoformat() if self.trash_expires_at else None,
             "days_until_purge": self.days_until_purge,

@@ -84,6 +84,7 @@ class FileServiceTests(TestCase):
         self.file_node.refresh_from_db()
 
         self.assertTrue(self.file_node.trashed)
+        self.assertFalse(self.file_node.ai_processing_enabled)
         self.assertIsNotNone(self.file_node.deleted_at)
 
     def test_restore_clears_deleted_at(self):
@@ -92,6 +93,7 @@ class FileServiceTests(TestCase):
         self.file_node.refresh_from_db()
 
         self.assertFalse(self.file_node.trashed)
+        self.assertFalse(self.file_node.ai_processing_enabled)
         self.assertIsNone(self.file_node.deleted_at)
 
     def test_move_to_trash_marks_descendants(self):
@@ -104,6 +106,8 @@ class FileServiceTests(TestCase):
 
         self.assertTrue(folder.trashed)
         self.assertTrue(child.trashed)
+        self.assertFalse(folder.ai_processing_enabled)
+        self.assertFalse(child.ai_processing_enabled)
         self.assertIsNotNone(folder.deleted_at)
         self.assertEqual(folder.deleted_at, child.deleted_at)
 

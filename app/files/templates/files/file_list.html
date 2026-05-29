@@ -1026,7 +1026,6 @@
   <h2>{% if current_folder_name %}{{ current_folder_name }}{% else %}모든 파일{% endif %}</h2>
   <div class="section-actions" style="display: flex; align-items: center; gap: 12px;">
     <span class="meta-text" id="fileCount" style="margin-right: 4px;">0개 파일</span>
-    <button type="button" class="inline-btn" id="langToggle" title="Korean / English">Kor</button>
     <input type="file" id="inlineUploadInput" multiple style="display:none;">
     <button type="button" class="btn btn-secondary" id="inlineUploadBtn" style="padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -1045,15 +1044,15 @@
 
 <div class="surface-strip ai-readiness-panel" id="aiReadinessPanel">
   <div class="ai-readiness-title">
-    <strong>AI 분석 준비 상태</strong>
-    <span class="ai-readiness-summary" id="aiReadinessSummary">상태를 불러오는 중입니다.</span>
+    <strong data-i18n="aiReadyTitle">AI 분석 준비 상태</strong>
+    <span class="ai-readiness-summary" id="aiReadinessSummary" data-i18n="aiReadyLoading">상태를 불러오는 중입니다.</span>
   </div>
   <div class="ai-readiness-meter">
     <div class="ai-readiness-bar" aria-hidden="true">
       <div class="ai-readiness-fill" id="aiReadinessFill"></div>
     </div>
     <div class="ai-readiness-stats" id="aiReadinessStats">
-      <span>검색 가능 0/0</span>
+      <span data-i18n="searchableInitial">검색 가능 0/0</span>
     </div>
   </div>
 </div>
@@ -1272,11 +1271,9 @@
 
   let allFiles = [];
   const VIEW_STORAGE_KEY = 'openshelf:file-list:view';
-  const LANG_STORAGE_KEY = 'openshelf:file-list:lang';
   let currentView = loadSavedViewMode();
   let searchMode = 'normal';
   let selectedUids = new Set();
-  let currentLang = loadSavedLanguage();
   const currentFolderUid = '{{ current_folder_uid|default:"" }}';
   const STATUS_ICON_BASE = '{% static "assets/status" %}';
 
@@ -1303,6 +1300,16 @@
       uploadFailed: '실패',
       emptyTitle: '업로드된 파일이 없습니다',
       emptyBody: '파일을 업로드하면 여기에 표시됩니다',
+      aiReadyTitle: 'AI 분석 준비 상태',
+      aiReadyLoading: '상태를 불러오는 중입니다.',
+      aiReadyNoFiles: '업로드된 파일이 없습니다.',
+      aiReadyAll: '모든 파일이 AI 검색/RAG 준비 완료 상태입니다.',
+      aiReadyNone: '아직 AI 검색/RAG에 사용할 수 있는 문서가 없습니다.',
+      aiReadyPartial: (ready) => `${ready}개 문서가 AI 검색/RAG에 준비되었습니다.`,
+      searchableInitial: '검색 가능 0/0',
+      searchable: (ready, total) => `검색 가능 ${ready}/${total}`,
+      parseStats: (completed, processing, failed) => `파싱 ${completed} 완료 · ${processing} 진행 · ${failed} 실패`,
+      embeddingStats: (completed, processing, failed) => `임베딩 ${completed} 완료 · ${processing} 진행 · ${failed} 실패`,
     },
     en: {
       upload: 'Upload',
@@ -1326,8 +1333,21 @@
       uploadFailed: 'Failed',
       emptyTitle: 'No files uploaded',
       emptyBody: 'Uploaded files will appear here',
+      aiReadyTitle: 'AI analysis readiness',
+      aiReadyLoading: 'Loading status.',
+      aiReadyNoFiles: 'No files uploaded.',
+      aiReadyAll: 'All files are ready for AI search/RAG.',
+      aiReadyNone: 'No documents are available for AI search/RAG yet.',
+      aiReadyPartial: (ready) => `${ready} documents are ready for AI search/RAG.`,
+      searchableInitial: 'Searchable 0/0',
+      searchable: (ready, total) => `Searchable ${ready}/${total}`,
+      parseStats: (completed, processing, failed) => `Parse ${completed} done · ${processing} running · ${failed} failed`,
+      embeddingStats: (completed, processing, failed) => `Embedding ${completed} done · ${processing} running · ${failed} failed`,
     },
   };
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register(UI_TEXT);
+  }
 
   document.addEventListener("DOMContentLoaded", () => {
     applyLanguage();
@@ -1349,7 +1369,6 @@
 
     document.getElementById('normalSearchBtn').addEventListener('click', () => setSearchMode('normal'));
     document.getElementById('aiSearchBtn').addEventListener('click', () => setSearchMode('ai'));
-    document.getElementById('langToggle').addEventListener('click', toggleLanguage);
     document.getElementById('inlineUploadBtn').addEventListener('click', () => document.getElementById('inlineUploadInput').click());
     document.getElementById('inlineUploadInput').addEventListener('change', (event) => uploadFiles(event.target.files));
     document.getElementById('bulkRagBtn').addEventListener('click', openRagForSelected);
@@ -1385,6 +1404,11 @@
     });
   });
 
+  document.addEventListener('openshelf:languagechange', () => {
+    applyLanguage();
+    renderFiles();
+  });
+
   function loadSavedViewMode() {
     try {
       const savedView = localStorage.getItem(VIEW_STORAGE_KEY);
@@ -1394,25 +1418,15 @@
     }
   }
 
-  function loadSavedLanguage() {
-    try {
-      return localStorage.getItem(LANG_STORAGE_KEY) === 'en' ? 'en' : 'ko';
-    } catch (error) {
-      return 'ko';
-    }
-  }
-
   function t(key, ...args) {
-    const value = (UI_TEXT[currentLang] || UI_TEXT.ko)[key];
+    if (window.OpenShelfI18n) {
+      return window.OpenShelfI18n.t(key, ...args);
+    }
+    const value = UI_TEXT.ko[key];
     return typeof value === 'function' ? value(...args) : value;
   }
 
   function applyLanguage() {
-    document.querySelectorAll('[data-i18n]').forEach((el) => {
-      const key = el.dataset.i18n;
-      if (UI_TEXT[currentLang][key]) el.textContent = t(key);
-    });
-    document.getElementById('langToggle').textContent = currentLang === 'ko' ? 'ENG' : 'KOR';
     document.getElementById('fileSearch').placeholder = searchMode === 'ai' ? t('aiPlaceholder') : t('searchPlaceholder');
     const empty = document.getElementById('emptyState');
     if (empty) {
@@ -1423,17 +1437,6 @@
       if (body) body.textContent = t('emptyBody');
       if (button) button.textContent = t('upload');
     }
-  }
-
-  function toggleLanguage() {
-    currentLang = currentLang === 'ko' ? 'en' : 'ko';
-    try {
-      localStorage.setItem(LANG_STORAGE_KEY, currentLang);
-    } catch (error) {
-      // Ignore storage errors.
-    }
-    applyLanguage();
-    renderFiles();
   }
 
   function saveViewMode(viewMode) {
@@ -1527,11 +1530,19 @@
         if (!data.ok) throw new Error('readiness response not ok');
         const readyPercent = Number(data.ready_percent || 0);
         fillEl.style.width = `${Math.min(Math.max(readyPercent, 0), 100)}%`;
-        summaryEl.textContent = data.summary || 'AI 분석 준비 상태를 확인했습니다.';
+        if (data.total_files === 0) {
+          summaryEl.textContent = t('aiReadyNoFiles');
+        } else if (data.searchable_files === data.total_files) {
+          summaryEl.textContent = t('aiReadyAll');
+        } else if (data.searchable_files === 0) {
+          summaryEl.textContent = t('aiReadyNone');
+        } else {
+          summaryEl.textContent = t('aiReadyPartial', data.searchable_files);
+        }
         statsEl.innerHTML = `
-          <span>검색 가능 ${data.searchable_files}/${data.total_files}</span>
-          <span>파싱 ${data.parse.completed} 완료 · ${data.parse.processing} 진행 · ${data.parse.failed} 실패</span>
-          <span>임베딩 ${data.embedding.completed} 완료 · ${data.embedding.processing} 진행 · ${data.embedding.failed} 실패</span>
+          <span>${t('searchable', data.searchable_files, data.total_files)}</span>
+          <span>${t('parseStats', data.parse.completed, data.parse.processing, data.parse.failed)}</span>
+          <span>${t('embeddingStats', data.embedding.completed, data.embedding.processing, data.embedding.failed)}</span>
         `;
       })
       .catch(() => {

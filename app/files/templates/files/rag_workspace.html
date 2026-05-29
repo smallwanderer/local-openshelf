@@ -443,16 +443,16 @@
 
 {% block files_body %}
 <div class="rag-header">
-  <h2>RAG 질문</h2>
+  <h2 data-i18n="ragPageTitle">RAG 질문</h2>
   <div class="rag-controls">
     <select class="rag-select" id="scopeSelect">
-      <option value="all">전체 문서</option>
-      <option value="selected">선택한 문서/폴더</option>
+      <option value="all" data-i18n="allDocuments">전체 문서</option>
+      <option value="selected" data-i18n="selectedDocuments">선택한 문서/폴더</option>
     </select>
     <select class="rag-select" id="topKSelect">
-      <option value="2">근거 2개</option>
-      <option value="3" selected>근거 3개</option>
-      <option value="5">근거 5개</option>
+      <option value="2" data-i18n="topK2">근거 2개</option>
+      <option value="3" selected data-i18n="topK3">근거 3개</option>
+      <option value="5" data-i18n="topK5">근거 5개</option>
     </select>
     <select class="rag-select" id="languageSelect">
       <option value="ko" selected>Kor</option>
@@ -464,24 +464,24 @@
 <div class="scope-picker" id="scopePicker">
   <div class="scope-picker-header">
     <div>
-      <strong>검색 범위 선택</strong>
+      <strong data-i18n="scopePickerTitle">검색 범위 선택</strong>
       <span class="ai-readiness-summary" id="scopePickerSummary">전체 문서를 대상으로 질문합니다.</span>
     </div>
     <div style="display:flex;align-items:center;gap:8px;">
-      <button type="button" class="btn btn-secondary" id="clearScopeBtn" style="padding:6px 10px;font-size:12px;">선택 해제</button>
+      <button type="button" class="btn btn-secondary" id="clearScopeBtn" style="padding:6px 10px;font-size:12px;" data-i18n="clearSelection">선택 해제</button>
       <button type="button" class="btn btn-secondary scope-picker-toggle" id="scopePickerToggle" style="padding:6px 10px;font-size:12px;">펼치기</button>
     </div>
   </div>
   <div class="scope-picker-body">
     <div>
-      <input class="scope-search" type="search" id="scopeSearch" placeholder="문서 또는 폴더 검색">
+      <input class="scope-search" type="search" id="scopeSearch" placeholder="문서 또는 폴더 검색" data-i18n-placeholder="scopeSearchPlaceholder">
       <div class="scope-list" id="scopeNodeList" style="margin-top:8px;">
-        <div class="source-empty">목록을 불러오는 중입니다.</div>
+        <div class="source-empty" data-i18n="loadingList">목록을 불러오는 중입니다.</div>
       </div>
     </div>
     <div>
       <div class="scope-selected-list" id="scopeSelectedList">
-        <div class="source-empty">선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.</div>
+        <div class="source-empty" data-i18n="emptyScopeUsesAll">선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.</div>
       </div>
     </div>
   </div>
@@ -489,15 +489,15 @@
 
 <div class="ai-readiness-panel" id="aiReadinessPanel">
   <div class="ai-readiness-title">
-    <strong>AI 분석 준비 상태</strong>
-    <span class="ai-readiness-summary" id="aiReadinessSummary">상태를 불러오는 중입니다.</span>
+    <strong data-i18n="aiReadyTitle">AI 분석 준비 상태</strong>
+    <span class="ai-readiness-summary" id="aiReadinessSummary" data-i18n="aiReadyLoading">상태를 불러오는 중입니다.</span>
   </div>
   <div class="ai-readiness-meter">
     <div class="ai-readiness-bar" aria-hidden="true">
       <div class="ai-readiness-fill" id="aiReadinessFill"></div>
     </div>
     <div class="ai-readiness-stats" id="aiReadinessStats">
-      <span>검색 가능 0/0</span>
+      <span data-i18n="searchableInitial">검색 가능 0/0</span>
     </div>
   </div>
 </div>
@@ -509,30 +509,30 @@
       <span class="scope-summary" id="selectedSummary">선택 문서 없음</span>
     </div>
     <div class="rag-progress" id="ragProgress" aria-label="RAG progress">
-      <div class="rag-step" data-step="search">근거 검색</div>
-      <div class="rag-step" data-step="answer">답변 생성</div>
-      <div class="rag-step" data-step="done">완료</div>
+      <div class="rag-step" data-step="search" data-i18n="searchEvidence">근거 검색</div>
+      <div class="rag-step" data-step="answer" data-i18n="generateAnswer">답변 생성</div>
+      <div class="rag-step" data-step="done" data-i18n="done">완료</div>
     </div>
 
     <div class="rag-messages" id="ragMessages">
-      <div class="rag-message assistant">
+      <div class="rag-message assistant" data-i18n="ragIntro">
         질문을 입력하면 관련 문서를 먼저 찾고, 이어서 근거 기반 답변을 생성합니다.
       </div>
     </div>
 
     <form class="rag-compose" id="ragForm">
-      <textarea class="rag-textarea" id="ragQuestion" placeholder="문서에 대해 질문하세요"></textarea>
-      <button type="submit" class="btn btn-primary rag-send">전송</button>
+      <textarea class="rag-textarea" id="ragQuestion" placeholder="문서에 대해 질문하세요" data-i18n-placeholder="questionPlaceholder"></textarea>
+      <button type="submit" class="btn btn-primary rag-send" data-i18n="send">전송</button>
     </form>
   </section>
 
   <aside class="rag-sources" aria-label="RAG sources">
     <div class="sources-header">
-      <strong>근거 문서</strong>
+      <strong data-i18n="evidenceDocuments">근거 문서</strong>
       <span>Score · Page · Section</span>
     </div>
     <div class="source-list" id="sourceList">
-      <div class="source-empty">질문을 입력하면 검색된 근거가 여기에 표시됩니다.</div>
+      <div class="source-empty" data-i18n="sourcesIntro">질문을 입력하면 검색된 근거가 여기에 표시됩니다.</div>
     </div>
   </aside>
 </div>
@@ -542,6 +542,130 @@
 
 {% block extra_scripts %}
 <script>
+  const RAG_TEXT = {
+    ko: {
+      ragPageTitle: 'RAG 질문',
+      allDocuments: '전체 문서',
+      selectedDocuments: '선택한 문서/폴더',
+      topK2: '근거 2개',
+      topK3: '근거 3개',
+      topK5: '근거 5개',
+      scopePickerTitle: '검색 범위 선택',
+      clearSelection: '선택 해제',
+      scopeSearchPlaceholder: '문서 또는 폴더 검색',
+      loadingList: '목록을 불러오는 중입니다.',
+      emptyScopeUsesAll: '선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.',
+      aiReadyTitle: 'AI 분석 준비 상태',
+      aiReadyLoading: '상태를 불러오는 중입니다.',
+      aiReadyNoFiles: '업로드된 파일이 없습니다.',
+      aiReadyAll: '모든 파일이 AI 검색/RAG 준비 완료 상태입니다.',
+      aiReadyNone: '아직 AI 검색/RAG에 사용할 수 있는 문서가 없습니다.',
+      aiReadyPartial: (ready) => `${ready}개 문서가 AI 검색/RAG에 준비되었습니다.`,
+      aiReadyChecked: 'AI 분석 준비 상태를 확인했습니다.',
+      aiReadyLoadFailed: 'AI 분석 준비 상태를 불러올 수 없습니다.',
+      searchableInitial: '검색 가능 0/0',
+      searchable: (ready, total) => `검색 가능 ${ready}/${total}`,
+      parseStats: (completed, processing, failed) => `파싱 ${completed} 완료 · ${processing} 진행 · ${failed} 실패`,
+      embeddingStats: (completed, processing, failed) => `임베딩 ${completed} 완료 · ${processing} 진행 · ${failed} 실패`,
+      statusCheckFailed: '상태 확인 실패',
+      selectedCount: count => `${count}개 문서/폴더 선택됨`,
+      selectedScopeSummary: count => `${count}개 문서/폴더 범위로 제한합니다.`,
+      noSelectedDocuments: '선택 문서 없음',
+      allDocumentsScopeSummary: '전체 문서를 대상으로 질문합니다.',
+      folder: '폴더',
+      document: '문서',
+      file: '파일',
+      fileCount: count => `${count}개 파일`,
+      noScopeNodes: '표시할 문서나 폴더가 없습니다.',
+      scopeLoadFailed: '문서/폴더 목록을 불러올 수 없습니다.',
+      expand: '펼치기',
+      collapse: '접기',
+      searchEvidence: '근거 검색',
+      generateAnswer: '답변 생성',
+      done: '완료',
+      ragIntro: '질문을 입력하면 관련 문서를 먼저 찾고, 이어서 근거 기반 답변을 생성합니다.',
+      questionPlaceholder: '문서에 대해 질문하세요',
+      send: '전송',
+      evidenceDocuments: '근거 문서',
+      sourcesIntro: '질문을 입력하면 검색된 근거가 여기에 표시됩니다.',
+      searchStarted: '검색 작업을 시작했습니다.',
+      searchingDocuments: '관련 문서를 검색 중입니다.',
+      requestFailed: 'RAG 요청 중 오류가 발생했습니다.',
+      answerFailed: 'RAG 답변 생성에 실패했습니다.',
+      foundEvidence: count => `관련 근거 ${count}개를 찾았습니다. 답변을 생성 중입니다.`,
+      noPreliminaryEvidence: '근거 검색은 끝났지만 표시할 근거가 없습니다. 답변 생성을 확인 중입니다.',
+      jobStillProcessing: '작업이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.',
+      rerunSameQuestion: '같은 질문 다시 실행',
+      statusPollFailed: 'RAG 작업 상태 확인 중 오류가 발생했습니다.',
+      emptyAnswer: '답변이 비어 있습니다.',
+      noEvidence: '표시할 근거가 없습니다.',
+      preliminaryEvidence: '답변 생성 전에 먼저 찾은 근거입니다.',
+      retry: '다시 시도',
+    },
+    en: {
+      ragPageTitle: 'RAG question',
+      allDocuments: 'All documents',
+      selectedDocuments: 'Selected documents/folders',
+      topK2: '2 sources',
+      topK3: '3 sources',
+      topK5: '5 sources',
+      scopePickerTitle: 'Search scope',
+      clearSelection: 'Clear selection',
+      scopeSearchPlaceholder: 'Search documents or folders',
+      loadingList: 'Loading list.',
+      emptyScopeUsesAll: 'If nothing is selected, all documents will be searched.',
+      aiReadyTitle: 'AI analysis readiness',
+      aiReadyLoading: 'Loading status.',
+      aiReadyNoFiles: 'No files uploaded.',
+      aiReadyAll: 'All files are ready for AI search/RAG.',
+      aiReadyNone: 'No documents are available for AI search/RAG yet.',
+      aiReadyPartial: (ready) => `${ready} documents are ready for AI search/RAG.`,
+      aiReadyChecked: 'AI analysis readiness checked.',
+      aiReadyLoadFailed: 'Unable to load AI analysis readiness.',
+      searchableInitial: 'Searchable 0/0',
+      searchable: (ready, total) => `Searchable ${ready}/${total}`,
+      parseStats: (completed, processing, failed) => `Parse ${completed} done · ${processing} running · ${failed} failed`,
+      embeddingStats: (completed, processing, failed) => `Embedding ${completed} done · ${processing} running · ${failed} failed`,
+      statusCheckFailed: 'Status check failed',
+      selectedCount: count => `${count} documents/folders selected`,
+      selectedScopeSummary: count => `Limited to ${count} selected documents/folders.`,
+      noSelectedDocuments: 'No documents selected',
+      allDocumentsScopeSummary: 'Questions will use all documents.',
+      folder: 'Folder',
+      document: 'Document',
+      file: 'File',
+      fileCount: count => `${count} files`,
+      noScopeNodes: 'No documents or folders to show.',
+      scopeLoadFailed: 'Unable to load the document/folder list.',
+      expand: 'Expand',
+      collapse: 'Collapse',
+      searchEvidence: 'Search evidence',
+      generateAnswer: 'Generate answer',
+      done: 'Done',
+      ragIntro: 'Ask a question to find relevant documents first, then generate a grounded answer.',
+      questionPlaceholder: 'Ask a question about your documents',
+      send: 'Send',
+      evidenceDocuments: 'Evidence documents',
+      sourcesIntro: 'Search evidence will appear here after you ask a question.',
+      searchStarted: 'Search job started.',
+      searchingDocuments: 'Searching related documents.',
+      requestFailed: 'An error occurred while requesting RAG.',
+      answerFailed: 'Failed to generate a RAG answer.',
+      foundEvidence: count => `Found ${count} relevant sources. Generating an answer.`,
+      noPreliminaryEvidence: 'Evidence search finished, but there is no evidence to show. Checking answer generation.',
+      jobStillProcessing: 'The job is still processing. Please try again shortly.',
+      rerunSameQuestion: 'Run the same question again',
+      statusPollFailed: 'An error occurred while checking the RAG job status.',
+      emptyAnswer: 'The answer is empty.',
+      noEvidence: 'No evidence to show.',
+      preliminaryEvidence: 'Evidence found before answer generation.',
+      retry: 'Retry',
+    },
+  };
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register(RAG_TEXT);
+  }
+
   const selectedNodesRaw = document.getElementById('selectedNodesData').textContent.trim();
   const selectedNodeIds = new Set(selectedNodesRaw ? selectedNodesRaw.split(',').filter(Boolean) : []);
   const scopeNodeMap = new Map();
@@ -568,6 +692,19 @@
   let activePollTimer = null;
   let lastRequest = null;
 
+  function t(key, ...args) {
+    if (window.OpenShelfI18n) {
+      return window.OpenShelfI18n.t(key, ...args);
+    }
+    const value = RAG_TEXT.ko[key];
+    return typeof value === 'function' ? value(...args) : value;
+  }
+
+  function syncRagLanguageFromGlobal() {
+    if (!window.OpenShelfI18n) return;
+    languageSelect.value = window.OpenShelfI18n.getLanguage() === 'en' ? 'en' : 'ko';
+  }
+
   function getCookie(name) {
     let cookieValue = null;
     if (document.cookie && document.cookie !== '') {
@@ -587,14 +724,14 @@
     const selectedCount = selectedNodeIds.size;
     if (selectedCount > 0) {
       scopeSelect.value = 'selected';
-      selectedSummary.textContent = `${selectedCount}개 문서/폴더 선택됨`;
-      scopePickerSummary.textContent = `${selectedCount}개 문서/폴더 범위로 제한합니다.`;
+      selectedSummary.textContent = t('selectedCount', selectedCount);
+      scopePickerSummary.textContent = t('selectedScopeSummary', selectedCount);
     } else {
-      selectedSummary.textContent = '선택 문서 없음';
-      scopePickerSummary.textContent = '전체 문서를 대상으로 질문합니다.';
+      selectedSummary.textContent = t('noSelectedDocuments');
+      scopePickerSummary.textContent = t('allDocumentsScopeSummary');
     }
     const selectedOption = scopeSelect.options[scopeSelect.selectedIndex];
-    scopePill.textContent = selectedOption ? selectedOption.textContent : '전체 문서';
+    scopePill.textContent = selectedOption ? selectedOption.textContent : t('allDocuments');
     renderSelectedScope();
   }
 
@@ -636,20 +773,20 @@
   }
 
   function nodeIcon(node) {
-    return node.node_type === 'directory' ? '폴더' : '문서';
+    return node.node_type === 'directory' ? t('folder') : t('document');
   }
 
   function renderScopeNodes(nodes) {
     if (!nodes.length) {
-      scopeNodeList.innerHTML = '<div class="source-empty">표시할 문서나 폴더가 없습니다.</div>';
+      scopeNodeList.innerHTML = `<div class="source-empty">${escapeHtml(t('noScopeNodes'))}</div>`;
       return;
     }
     nodes.forEach((node) => scopeNodeMap.set(node.uid, node));
     scopeNodeList.innerHTML = nodes.map((node) => {
       const checked = selectedNodeIds.has(node.uid) ? 'checked' : '';
       const meta = node.node_type === 'directory'
-        ? `${node.file_count || 0}개 파일`
-        : (node.ext || '파일');
+        ? t('fileCount', node.file_count || 0)
+        : (node.ext || t('file'));
       const indent = Math.min(Number(node.depth || 0), 8) * 14;
       const rowClass = node.node_type === 'directory' ? 'scope-node folder' : 'scope-node';
       return `
@@ -667,7 +804,7 @@
 
   function renderSelectedScope() {
     if (!selectedNodeIds.size) {
-      scopeSelectedList.innerHTML = '<div class="source-empty">선택한 문서나 폴더가 없으면 전체 문서를 검색합니다.</div>';
+      scopeSelectedList.innerHTML = `<div class="source-empty">${escapeHtml(t('emptyScopeUsesAll'))}</div>`;
       return;
     }
     scopeSelectedList.innerHTML = Array.from(selectedNodeIds).map((uid) => {
@@ -696,13 +833,13 @@
         updateScopeSummary();
       })
       .catch(() => {
-        scopeNodeList.innerHTML = '<div class="source-empty">문서/폴더 목록을 불러올 수 없습니다.</div>';
+        scopeNodeList.innerHTML = `<div class="source-empty">${escapeHtml(t('scopeLoadFailed'))}</div>`;
       });
   }
 
   function setScopePickerCollapsed(collapsed) {
     scopePicker.classList.toggle('collapsed', collapsed);
-    scopePickerToggle.textContent = collapsed ? '펼치기' : '접기';
+    scopePickerToggle.textContent = collapsed ? t('expand') : t('collapse');
   }
 
   function setMessageHtml(messageId, html) {
@@ -710,7 +847,7 @@
     if (messageEl) messageEl.innerHTML = html;
   }
 
-  function renderRetryAction(label = '다시 시도') {
+  function renderRetryAction(label = t('retry')) {
     return `<div class="rag-actions"><button type="button" class="btn btn-secondary retry-rag-button">${escapeHtml(label)}</button></div>`;
   }
 
@@ -724,17 +861,25 @@
         if (!data.ok) throw new Error('readiness response not ok');
         const readyPercent = Number(data.ready_percent || 0);
         aiReadinessFill.style.width = `${Math.min(Math.max(readyPercent, 0), 100)}%`;
-        aiReadinessSummary.textContent = data.summary || 'AI 분석 준비 상태를 확인했습니다.';
+        if (data.total_files === 0) {
+          aiReadinessSummary.textContent = t('aiReadyNoFiles');
+        } else if (data.searchable_files === data.total_files) {
+          aiReadinessSummary.textContent = t('aiReadyAll');
+        } else if (data.searchable_files === 0) {
+          aiReadinessSummary.textContent = t('aiReadyNone');
+        } else {
+          aiReadinessSummary.textContent = t('aiReadyPartial', data.searchable_files);
+        }
         aiReadinessStats.innerHTML = `
-          <span>검색 가능 ${data.searchable_files}/${data.total_files}</span>
-          <span>파싱 ${data.parse.completed} 완료 · ${data.parse.processing} 진행 · ${data.parse.failed} 실패</span>
-          <span>임베딩 ${data.embedding.completed} 완료 · ${data.embedding.processing} 진행 · ${data.embedding.failed} 실패</span>
+          <span>${t('searchable', data.searchable_files, data.total_files)}</span>
+          <span>${t('parseStats', data.parse.completed, data.parse.processing, data.parse.failed)}</span>
+          <span>${t('embeddingStats', data.embedding.completed, data.embedding.processing, data.embedding.failed)}</span>
         `;
       })
       .catch(() => {
-        aiReadinessSummary.textContent = 'AI 분석 준비 상태를 불러올 수 없습니다.';
+        aiReadinessSummary.textContent = t('aiReadyLoadFailed');
         aiReadinessFill.style.width = '0%';
-        aiReadinessStats.innerHTML = '<span>상태 확인 실패</span>';
+        aiReadinessStats.innerHTML = `<span>${escapeHtml(t('statusCheckFailed'))}</span>`;
       });
   }
 
@@ -779,14 +924,22 @@
     if (!question) return;
     startRagRequest(question);
   });
+  document.addEventListener('openshelf:languagechange', () => {
+    syncRagLanguageFromGlobal();
+    updateScopeSummary();
+    setScopePickerCollapsed(scopePicker.classList.contains('collapsed'));
+    renderScopeNodes(Array.from(scopeNodeMap.values()));
+    renderSelectedScope();
+    loadAIReadiness();
+  });
 
   async function startRagRequest(question, existingPayload = null) {
     ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message user">${escapeHtml(question)}</div>`);
     const pendingId = `rag-pending-${Date.now()}`;
-    ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message assistant" id="${pendingId}">검색 작업을 시작했습니다.</div>`);
+    ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message assistant" id="${pendingId}">${escapeHtml(t('searchStarted'))}</div>`);
     ragQuestion.value = '';
     ragMessages.scrollTop = ragMessages.scrollHeight;
-    sourceList.innerHTML = '<div class="source-empty">관련 문서를 검색 중입니다.</div>';
+    sourceList.innerHTML = `<div class="source-empty">${escapeHtml(t('searchingDocuments'))}</div>`;
     setProgress('search');
 
     try {
@@ -806,7 +959,7 @@
       pollRagJob(data.job_id, pendingId, 0);
     } catch (error) {
       setProgress('failed');
-      setMessageHtml(pendingId, `RAG 요청 중 오류가 발생했습니다.${renderRetryAction()}`);
+      setMessageHtml(pendingId, `${escapeHtml(t('requestFailed'))}${renderRetryAction()}`);
       console.error(error);
     }
   }
@@ -840,7 +993,7 @@
 
         if (job.status === 'failed') {
           setProgress('failed');
-          messageEl.innerHTML = `${escapeHtml(job.error_message || 'RAG 답변 생성에 실패했습니다.')}${renderRetryAction()}`;
+          messageEl.innerHTML = `${escapeHtml(job.error_message || t('answerFailed'))}${renderRetryAction()}`;
           const failedSources = job.citations && job.citations.length
             ? job.citations
             : flattenSearchResults(job.search_results || []);
@@ -853,18 +1006,18 @@
           setProgress('answer');
           if (preliminarySources.length) {
             renderSources(preliminarySources, { preliminary: true });
-            messageEl.textContent = `관련 근거 ${preliminarySources.length}개를 찾았습니다. 답변을 생성 중입니다.`;
+            messageEl.textContent = t('foundEvidence', preliminarySources.length);
           } else {
-            messageEl.textContent = '근거 검색은 끝났지만 표시할 근거가 없습니다. 답변 생성을 확인 중입니다.';
+            messageEl.textContent = t('noPreliminaryEvidence');
           }
         } else {
           setProgress('search');
-          messageEl.textContent = '관련 문서를 검색 중입니다.';
+          messageEl.textContent = t('searchingDocuments');
         }
 
         if (attempt >= 120) {
           setProgress('failed');
-          messageEl.innerHTML = `작업이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.${renderRetryAction('같은 질문 다시 실행')}`;
+          messageEl.innerHTML = `${escapeHtml(t('jobStillProcessing'))}${renderRetryAction(t('rerunSameQuestion'))}`;
           return;
         }
         activePollTimer = setTimeout(() => pollRagJob(jobId, messageId, attempt + 1), 1500);
@@ -872,13 +1025,13 @@
       .catch((error) => {
         const messageEl = document.getElementById(messageId);
         setProgress('failed');
-        if (messageEl) messageEl.innerHTML = `RAG 작업 상태 확인 중 오류가 발생했습니다.${renderRetryAction()}`;
+        if (messageEl) messageEl.innerHTML = `${escapeHtml(t('statusPollFailed'))}${renderRetryAction()}`;
         console.error(error);
       });
   }
 
   function renderAnswer(answer) {
-    return escapeHtml(answer || '답변이 비어 있습니다.')
+    return escapeHtml(answer || t('emptyAnswer'))
       .replace(/\[(\d+)\]/g, '<button type="button" class="citation" data-citation-id="$1">$1</button>')
       .replace(/\n/g, '<br>');
   }
@@ -909,11 +1062,11 @@
 
   function renderSources(citations, options = {}) {
     if (!citations.length) {
-      sourceList.innerHTML = '<div class="source-empty">표시할 근거가 없습니다.</div>';
+      sourceList.innerHTML = `<div class="source-empty">${escapeHtml(t('noEvidence'))}</div>`;
       return;
     }
     const prefix = options.preliminary
-      ? '<div class="source-empty" style="margin-bottom:10px;">답변 생성 전에 먼저 찾은 근거입니다.</div>'
+      ? `<div class="source-empty" style="margin-bottom:10px;">${escapeHtml(t('preliminaryEvidence'))}</div>`
       : '';
     sourceList.innerHTML = citations.map((citation) => {
       const scoreParts = [];
@@ -951,6 +1104,7 @@
     }
   });
 
+  syncRagLanguageFromGlobal();
   updateScopeSummary();
   setScopePickerCollapsed(selectedNodeIds.size === 0);
   loadScopeNodes();

@@ -4,10 +4,10 @@
 
 {% block files_body %}
 <div class="section-header">
-  <h2>Trash</h2>
+  <h2 data-i18n="trashTitle">Trash</h2>
   <div class="section-actions" id="emptyTrashAction" style="display:none;">
     <button onclick="emptyTrash()" class="btn btn-ghost" style="color:var(--danger);">
-      Empty trash
+      <span data-i18n="emptyTrash">Empty trash</span>
     </button>
   </div>
 </div>
@@ -15,14 +15,14 @@
 <div id="bulkTrashToolbar" style="display:none; align-items:center; justify-content:space-between; gap:12px; padding:9px 12px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:12px;">
   <strong class="meta-text" id="trashSelectedCount">0 selected</strong>
   <div style="display:flex; gap:8px; flex-wrap:wrap;">
-    <button type="button" class="btn btn-secondary" onclick="bulkRestore()">Restore selected</button>
-    <button type="button" class="btn btn-secondary" onclick="clearTrashSelection()">Clear</button>
+    <button type="button" class="btn btn-secondary" onclick="bulkRestore()" data-i18n="restoreSelected">Restore selected</button>
+    <button type="button" class="btn btn-secondary" onclick="clearTrashSelection()" data-i18n="clearSelection">Clear</button>
   </div>
 </div>
 
 <div style="background:var(--bg); border-radius:var(--radius); padding:11px 16px; font-size:13px; color:var(--muted); margin-bottom:16px; display:flex; align-items:center; gap:8px;">
   <span>i</span>
-  <span>Trashed files are kept for 7 days before automatic removal.</span>
+  <span data-i18n="trashRetentionNotice">Trashed files are kept for 7 days before automatic removal.</span>
 </div>
 
 <div class="file-table-wrap" id="tableWrap" style="display:none;">
@@ -30,10 +30,10 @@
     <thead>
       <tr>
         <th style="width:40px;"><input type="checkbox" id="selectAllTrash" onchange="toggleSelectAllTrash(this.checked)"></th>
-        <th>Name</th>
-        <th>Size</th>
-        <th>Deleted on</th>
-        <th>Auto delete in</th>
+        <th data-i18n="name">Name</th>
+        <th data-i18n="size">Size</th>
+        <th data-i18n="deletedOn">Deleted on</th>
+        <th data-i18n="autoDeleteIn">Auto delete in</th>
         <th></th>
       </tr>
     </thead>
@@ -42,14 +42,65 @@
 </div>
 
 <div class="empty-state" id="emptyState" style="display:none;">
-  <div class="empty-state-icon">Trash</div>
-  <h3>Your trash is empty</h3>
-  <p>Deleted files will appear here for 7 days.</p>
+  <div class="empty-state-icon" data-i18n="trashIconText">Trash</div>
+  <h3 data-i18n="trashEmptyTitle">Your trash is empty</h3>
+  <p data-i18n="trashEmptyBody">Deleted files will appear here for 7 days.</p>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register({
+      ko: {
+        trashTitle: '휴지통',
+        emptyTrash: '휴지통 비우기',
+        restoreSelected: '선택 항목 복원',
+        clearSelection: '선택 해제',
+        trashRetentionNotice: '휴지통 파일은 자동 삭제 전 7일 동안 보관됩니다.',
+        name: '이름',
+        size: '크기',
+        deletedOn: '삭제 날짜',
+        autoDeleteIn: '자동 삭제까지',
+        trashIconText: '휴지통',
+        trashEmptyTitle: '휴지통이 비어 있습니다',
+        trashEmptyBody: '삭제한 파일은 7일 동안 여기에 표시됩니다.',
+        selected: count => `${count}개 선택됨`,
+        daysLeft: count => `${count}일`,
+        restore: '복원',
+        deletePermanently: '영구 삭제',
+        restoreSelectedFailed: '선택 항목을 복원할 수 없습니다.',
+        restoreFailed: '이 항목을 복원할 수 없습니다.',
+        confirmPermanentDelete: '이 항목을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.',
+        confirmEmptyTrash: '휴지통을 비울까요? 이후에는 복원할 수 없습니다.',
+      },
+      en: {
+        trashTitle: 'Trash',
+        emptyTrash: 'Empty trash',
+        restoreSelected: 'Restore selected',
+        clearSelection: 'Clear',
+        trashRetentionNotice: 'Trashed files are kept for 7 days before automatic removal.',
+        name: 'Name',
+        size: 'Size',
+        deletedOn: 'Deleted on',
+        autoDeleteIn: 'Auto delete in',
+        trashIconText: 'Trash',
+        trashEmptyTitle: 'Your trash is empty',
+        trashEmptyBody: 'Deleted files will appear here for 7 days.',
+        selected: count => `${count} selected`,
+        daysLeft: count => `${count} day${count === 1 ? '' : 's'}`,
+        restore: 'Restore',
+        deletePermanently: 'Delete permanently',
+        restoreSelectedFailed: 'Unable to restore selected items.',
+        restoreFailed: 'Unable to restore this item.',
+        confirmPermanentDelete: 'Permanently delete this item? This cannot be undone.',
+        confirmEmptyTrash: 'Empty the trash? Restoring these items will no longer be possible.',
+      },
+    });
+  }
+  function t(key, ...args) {
+    return window.OpenShelfI18n ? window.OpenShelfI18n.t(key, ...args) : key;
+  }
   function getCookie(name) {
     let cookieValue = null;
     if (document.cookie && document.cookie !== '') {
@@ -75,6 +126,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", fetchTrash);
+  document.addEventListener('openshelf:languagechange', () => renderTable(trashFiles));
   let trashFiles = [];
   let selectedTrashUids = new Set();
 
@@ -129,11 +181,11 @@
         </td>
         <td class="meta-text">${f.size_mb ? `${escapeHtml(f.size_mb)} MB` : '-'}</td>
         <td class="meta-text">${deletedAt}</td>
-        <td class="meta-text">${escapeHtml(daysLeft)} day${daysLeft === 1 ? '' : 's'}</td>
+        <td class="meta-text">${escapeHtml(t('daysLeft', daysLeft))}</td>
         <td>
           <div class="file-actions">
-            <button onclick="restoreFile('${f.uid}')" class="icon-btn" title="Restore" style="font-size:13px;border:none;background:none;cursor:pointer;">Restore</button>
-            <button onclick="permanentDelete('${f.uid}')" class="icon-btn danger" title="Delete permanently" style="border:none;background:none;cursor:pointer;">
+            <button onclick="restoreFile('${f.uid}')" class="icon-btn" title="${t('restore')}" style="font-size:13px;border:none;background:none;cursor:pointer;">${t('restore')}</button>
+            <button onclick="permanentDelete('${f.uid}')" class="icon-btn danger" title="${t('deletePermanently')}" style="border:none;background:none;cursor:pointer;">
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/>
               </svg>
@@ -149,7 +201,7 @@
   function updateTrashBulkToolbar() {
     const count = selectedTrashUids.size;
     document.getElementById('bulkTrashToolbar').style.display = count > 0 ? 'flex' : 'none';
-    document.getElementById('trashSelectedCount').textContent = `${count} selected`;
+    document.getElementById('trashSelectedCount').textContent = t('selected', count);
     const selectAll = document.getElementById('selectAllTrash');
     if (selectAll) {
       selectAll.checked = trashFiles.length > 0 && trashFiles.every((file) => selectedTrashUids.has(file.uid));
@@ -190,7 +242,7 @@
     .then(res => res.json())
     .then(data => {
       if (!data.ok) {
-        alert((data.errors || ['Unable to restore selected items.']).join('\n'));
+        alert((data.errors || [t('restoreSelectedFailed')]).join('\n'));
       }
       selectedTrashUids.clear();
       fetchTrash();
@@ -208,13 +260,13 @@
         fetchTrash();
         return;
       }
-      alert((data.errors && data.errors[0]) || 'Unable to restore this item.');
+      alert((data.errors && data.errors[0]) || t('restoreFailed'));
       fetchTrash();
     });
   }
 
   function permanentDelete(uid) {
-    if (confirm('Permanently delete this item? This cannot be undone.')) {
+    if (confirm(t('confirmPermanentDelete'))) {
       fetch(`/files/api/v1/${uid}/permanent_delete/`, {
         method: 'POST',
         headers: {'X-CSRFToken': getCookie('csrftoken')}
@@ -227,7 +279,7 @@
   }
 
   function emptyTrash() {
-    if (confirm('Empty the trash? Restoring these items will no longer be possible.')) {
+    if (confirm(t('confirmEmptyTrash'))) {
       fetch('/files/api/v1/trash/empty/', {
         method: 'POST',
         headers: {'X-CSRFToken': getCookie('csrftoken')}

@@ -291,51 +291,51 @@
   <aside class="files-sidebar">
 
     <a href="{% url 'files:page_upload' %}" class="btn btn-primary sidebar-upload-btn">
-      + 파일 업로드
+      <span data-i18n="sidebarUpload">+ 파일 업로드</span>
     </a>
 
     <a href="{% url 'files:page_rag' %}"
        class="rag-entry-card {% if request.resolver_match.url_name == 'page_rag' %}active{% endif %}">
       <img src="{% static 'assets/rag/rag-question.svg' %}" alt="">
       <span class="rag-entry-title">
-        <span>RAG 질문</span>
+        <span data-i18n="ragQuestion">RAG 질문</span>
         <span aria-hidden="true">→</span>
       </span>
-      <span class="rag-entry-subtitle">문서 근거 기반 답변</span>
+      <span class="rag-entry-subtitle" data-i18n="ragSubtitle">문서 근거 기반 답변</span>
     </a>
 
     <div class="sidebar-section">
-      <p class="sidebar-section-title">탐색</p>
+      <p class="sidebar-section-title" data-i18n="sidebarExplore">탐색</p>
       <nav class="sidebar-nav">
 
         <a href="{% url 'files:index' %}"
            class="{% if request.resolver_match.url_name == 'index' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-          모든 파일
+          <span data-i18n="allFiles">모든 파일</span>
         </a>
 
         <a href="{% url 'files:page_recent' %}"
            class="{% if request.resolver_match.url_name == 'page_recent' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          최근 파일
+          <span data-i18n="recentFiles">최근 파일</span>
         </a>
 
         <a href="{% url 'files:page_starred' %}"
            class="{% if request.resolver_match.url_name == 'page_starred' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-          즐겨찾기
+          <span data-i18n="starred">즐겨찾기</span>
         </a>
 
         <a href="{% url 'files:page_ai_history' %}"
            class="{% if request.resolver_match.url_name == 'page_ai_history' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          AI 검색 기록
+          <span data-i18n="aiSearchHistory">AI 검색 기록</span>
         </a>
 
         <a href="{% url 'files:page_trash' %}"
            class="{% if request.resolver_match.url_name == 'page_trash' %}active{% endif %}">
           <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-          휴지통
+          <span data-i18n="trash">휴지통</span>
         </a>
 
       </nav>
@@ -343,9 +343,9 @@
 
     <!-- 저장 공간 -->
     <div class="sidebar-section">
-      <p class="sidebar-section-title">저장 공간</p>
+      <p class="sidebar-section-title" data-i18n="storage">저장 공간</p>
       <div class="storage-box">
-        <p class="storage-label">사용 중인 공간</p>
+        <p class="storage-label" data-i18n="storageUsed">사용 중인 공간</p>
         <div class="storage-bar">
           <div class="storage-bar-fill" style="width: {{ user_storage.usage_percent }}%"></div>
         </div>
@@ -363,4 +363,40 @@
   </main>
 
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+<script>
+  if (window.OpenShelfI18n) {
+    window.OpenShelfI18n.register({
+      ko: {
+        sidebarUpload: '+ 파일 업로드',
+        ragQuestion: 'RAG 질문',
+        ragSubtitle: '문서 근거 기반 답변',
+        sidebarExplore: '탐색',
+        allFiles: '모든 파일',
+        recentFiles: '최근 파일',
+        starred: '즐겨찾기',
+        aiSearchHistory: 'AI 검색 기록',
+        trash: '휴지통',
+        storage: '저장 공간',
+        storageUsed: '사용 중인 공간',
+      },
+      en: {
+        sidebarUpload: '+ Upload files',
+        ragQuestion: 'RAG question',
+        ragSubtitle: 'Document-grounded answers',
+        sidebarExplore: 'Explore',
+        allFiles: 'All files',
+        recentFiles: 'Recent files',
+        starred: 'Starred',
+        aiSearchHistory: 'AI search history',
+        trash: 'Trash',
+        storage: 'Storage',
+        storageUsed: 'Used space',
+      },
+    });
+  }
+</script>
 {% endblock %}
