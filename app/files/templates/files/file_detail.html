@@ -364,8 +364,10 @@
         </div>
         <div class="info-item">
           <span class="info-label">AI 분석 상태</span>
-          <span class="info-value" style="display:flex;align-items:center;gap:6px;">
-            {% if file.get_ai_status.embedding_completed %}
+          <span id="aiProcessingState" class="info-value" style="display:flex;align-items:center;gap:6px;">
+            {% if not file.ai_processing_enabled %}
+              <span style="color:#6B7280;">AI 분석 제외됨</span>
+            {% elif file.get_ai_status.embedding_completed %}
               <span style="color:#10B981;">✔️ 완료됨</span>
             {% elif file.get_ai_status.embedding_status.value == 'FAILED' or file.get_ai_status.parse_status.value == 'FAILED' %}
               <span style="color:#EF4444;">❌ 오류 발생</span>
@@ -383,6 +385,9 @@
 
     <!-- Actions Card -->
     <div style="display:flex; flex-direction:column; gap:8px;">
+      <button type="button" class="action-btn" id="aiProcessingToggleBtn" onclick="toggleAIProcessing()">
+        AI 분석 제외
+      </button>
       <a href="{% url 'files:page_rag' %}?nodes={{ file.uid }}" class="action-btn primary">
         <img src="{% static 'assets/rag/rag-question.svg' %}" alt="" width="18" height="18" style="object-fit:contain;filter:invert(1);">
         이 문서에 RAG 질문하기
@@ -398,6 +403,7 @@
 
 <script>
   const fileUid = "{{ file.uid }}";
+  let aiProcessingEnabled = {{ file.ai_processing_enabled|yesno:"true,false" }};
   let currentSummary = `{{ file.parse_result.summary|escapejs|default:"" }}`;
   let currentTags = [];
   {% if file.parse_result.auto_tags %}
@@ -557,6 +563,35 @@
     }
   }
 
+  function renderAIProcessingState() {
+    const button = document.getElementById('aiProcessingToggleBtn');
+    if (button) {
+      button.textContent = aiProcessingEnabled ? 'AI 분석 제외' : 'AI 분석 허용';
+    }
+  }
+
+  function toggleAIProcessing() {
+    fetch(`/files/api/v1/${fileUid}/ai/enabled/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({ enabled: !aiProcessingEnabled })
+    }).then(res => res.json()).then(data => {
+      if (!data.ok) {
+        alert(data.errors ? data.errors.join('\n') : '업데이트 실패');
+        return;
+      }
+      aiProcessingEnabled = data.enabled;
+      window.location.reload();
+    }).catch(() => {
+      alert('오류가 발생했습니다.');
+    });
+  }
+
+  renderAIProcessingState();
+
   // --- Viewer Logic ---
   const fileMime = "{{ file.mime_type|default:'' }}";
   const fileExt = "{{ file.ext|default:'' }}".toLowerCase();
@@ -635,4 +670,3 @@
   });
 </script>
 {% endblock %}
-

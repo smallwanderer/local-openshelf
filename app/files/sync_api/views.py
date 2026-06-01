@@ -104,6 +104,14 @@ def _update_sync_quota(user, file_size):
     SyncQuota.objects.filter(user=user).update(used_size=F("used_size") + file_size)
 
 
+def _bool_from_request(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "off", "no"}
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 
@@ -203,6 +211,7 @@ def upload(request):
     rel_path = request.POST.get("rel_path", "")
     sync_id = request.POST.get("sync_id", "")
     content_hash = request.POST.get("content_hash", "")
+    ai_processing_value = request.POST.get("ai_processing_enabled")
 
     if not rel_path:
         return JsonResponse({"ok": False, "errors": ["rel_path is required."]}, status=400)
@@ -271,6 +280,9 @@ def upload(request):
                     mime_type=getattr(uploaded_file, "content_type", ""),
                     sha256=content_hash,
                 )
+                if ai_processing_value is not None:
+                    existing.ai_processing_enabled = _bool_from_request(ai_processing_value)
+                    existing.save(update_fields=["ai_processing_enabled", "updated_at"])
             # Adjust quota: subtract old, add new
             SyncQuota.objects.filter(user=request.user).update(
                 used_size=F("used_size") - old_size + uploaded_file.size
@@ -287,6 +299,7 @@ def upload(request):
             file=uploaded_file,
             description=f"synced: {rel_path}",
             parent=parent,
+            ai_processing_enabled=_bool_from_request(ai_processing_value, default=True),
         )
 
         # Update sync quota

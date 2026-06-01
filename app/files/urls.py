@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/v1/<uuid:uid>/meta/", api_views.update_meta, name="api_update_meta"),
     path("api/v1/<uuid:uid>/rename/", api_views.rename_file, name="api_rename"),
     path("api/v1/<uuid:uid>/move/", api_views.move_file, name="api_move"),
+    path("api/v1/<uuid:uid>/ai/enabled/", api_views.set_ai_processing, name="api_set_ai_processing"),
     path("api/v1/<uuid:uid>/ai/retry/", api_views.retry_ai_processing, name="api_retry_ai"),
     path("api/v1/<uuid:uid>/download/", api_views.file_download, name="api_download"),
     path("api/v1/<uuid:uid>/delete/", api_views.file_delete, name="api_delete"),

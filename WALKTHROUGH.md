@@ -33,7 +33,7 @@ cd local-openshelf
 
 ```bash
 git fetch --tags
-git checkout v0.1.0-alpha
+git checkout v0.1.1
 ```
 
 ## 3. 서버에서 실행하기
@@ -208,11 +208,14 @@ CI와 같은 unit test:
 docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m pytest -m "unit"
 ```
 
-개발 app 컨테이너에서 전체 테스트:
+개발 app 컨테이너에서 웹/API 중심 테스트:
 
 ```bash
-docker compose -f docker-compose.dev.yml exec app python -m pytest
+docker compose -f docker-compose.dev.yml exec app python manage.py check
+docker compose -f docker-compose.dev.yml exec app python -m pytest --reuse-db files/tests.py tests/test_rag_flow.py
 ```
+
+웹 `app` 컨테이너는 AI 의존성을 가볍게 유지합니다. Docling 기반 테스트는 `celery-core-worker`에서 실행합니다.
 
 ## 5. 자주 발생하는 문제
 
@@ -288,7 +291,7 @@ docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m p
 
 ```bash
 git fetch --tags
-git checkout v0.1.0-alpha
+git checkout v0.1.1
 docker compose up -d --build
 docker compose exec app python manage.py migrate
 ```
@@ -297,7 +300,7 @@ docker compose exec app python manage.py migrate
 
 ```bash
 git fetch --tags
-git checkout v0.1.0-alpha
+git checkout v0.1.1
 docker compose -f docker-compose.dev.yml up -d --build
 docker compose -f docker-compose.dev.yml exec app python manage.py migrate
 ```

@@ -110,6 +110,24 @@
     stroke-width: 2; stroke-linecap: round;
   }
 
+  .upload-ai-option {
+    margin-top: 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .upload-ai-option input {
+    margin-top: 3px;
+  }
+  .upload-ai-option small {
+    display: block;
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
   /* ── 업로드 액션 ── */
   .upload-actions {
     display: flex;
@@ -158,6 +176,14 @@
   <span data-i18n="multiUpload">복수 파일 동시 업로드 가능</span>
 </div>
 
+<label class="upload-ai-option">
+  <input type="checkbox" id="aiProcessingEnabled" checked>
+  <span>
+    <span data-i18n="aiProcessingOption">업로드 후 AI 분석</span>
+    <small data-i18n="aiProcessingOptionHelp">끄면 파싱/임베딩/RAG 검색 대상에서 제외됩니다.</small>
+  </span>
+</label>
+
 <!-- 업로드 대기 목록 -->
 <div class="upload-queue" id="uploadQueue" style="display:none;"></div>
 
@@ -185,6 +211,12 @@
         startUpload: '업로드 시작',
         waiting: '대기 중',
         remove: '제거',
+        aiProcessingOption: '업로드 후 AI 분석',
+        aiProcessingOptionHelp: '끄면 파싱/임베딩/RAG 검색 대상에서 제외됩니다.',
+        uploading: '업로드 중',
+        uploadingProgress: '업로드 중...',
+        uploadDone: '완료',
+        uploadFailed: '실패',
       },
       en: {
         uploadTitle: 'Upload files',
@@ -198,6 +230,12 @@
         startUpload: 'Start upload',
         waiting: 'Waiting',
         remove: 'Remove',
+        aiProcessingOption: 'Analyze with AI after upload',
+        aiProcessingOptionHelp: 'Turn this off to exclude files from parsing, embedding, and RAG search.',
+        uploading: 'Uploading',
+        uploadingProgress: 'Uploading...',
+        uploadDone: 'Done',
+        uploadFailed: 'Failed',
       },
     });
   }
@@ -210,6 +248,7 @@
   const actions = document.getElementById('uploadActions');
   const clearBtn = document.getElementById('clearBtn');
   const startBtn = document.getElementById('startUploadBtn');
+  const aiProcessingEnabled = document.getElementById('aiProcessingEnabled');
 
   let files = [];
   document.addEventListener('openshelf:languagechange', renderQueue);
@@ -297,16 +336,17 @@
   // 업로드 시작
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
-    startBtn.textContent = '업로드 중...';
+    startBtn.textContent = t('uploadingProgress');
 
     for (let i = 0; i < files.length; i++) {
       const statusEl = document.getElementById(`status-${i}`);
       const progressEl = document.getElementById(`progress-${i}`);
       statusEl.className = 'status-badge status-uploading';
-      statusEl.textContent = '업로드 중';
+      statusEl.textContent = t('uploading');
 
       const formData = new FormData();
       formData.append('file', files[i]);
+      formData.append('ai_processing_enabled', aiProcessingEnabled.checked ? '1' : '0');
       formData.append('csrfmiddlewaretoken', '{{ csrf_token }}');
 
       try {
@@ -321,7 +361,7 @@
           xhr.onload = () => {
             if (xhr.status === 200 || xhr.status === 201 || xhr.status === 302) {
               statusEl.className = 'status-badge status-done';
-              statusEl.textContent = '완료';
+              statusEl.textContent = t('uploadDone');
               progressEl.style.width = '100%';
               resolve();
             } else {
@@ -333,11 +373,11 @@
         });
       } catch {
         statusEl.className = 'status-badge status-error';
-        statusEl.textContent = '실패';
+        statusEl.textContent = t('uploadFailed');
       }
     }
 
-    startBtn.textContent = '완료';
+    startBtn.textContent = t('uploadDone');
     setTimeout(() => {
       window.location.href = '{% url "files:index" %}';
     }, 1000);

@@ -1295,6 +1295,9 @@
       folder: '폴더',
       download: '다운로드',
       retry: '재시도',
+      disableAi: 'AI 제외',
+      enableAi: 'AI 허용',
+      aiDisabled: 'AI 분석 제외됨',
       uploading: '업로드 중',
       uploadDone: '완료',
       uploadFailed: '실패',
@@ -1328,6 +1331,9 @@
       folder: 'Folder',
       download: 'Download',
       retry: 'Retry',
+      disableAi: 'Disable AI',
+      enableAi: 'Enable AI',
+      aiDisabled: 'AI analysis disabled',
       uploading: 'Uploading',
       uploadDone: 'Done',
       uploadFailed: 'Failed',
@@ -1623,6 +1629,7 @@
       const status = document.getElementById(`uploadStatus-${index}`);
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('ai_processing_enabled', '1');
       if (currentFolderUid) formData.append('parent_id', currentFolderUid);
 
       xhr.open('POST', '/files/api/v1/upload/');
@@ -1836,6 +1843,13 @@
       `,
     ];
 
+    if (!file.ai_processing_enabled) {
+      badges.push(`
+        <span class="status-badge failed" title="${t('aiDisabled')}" aria-label="${t('aiDisabled')}">AI</span>
+      `);
+      return `<div class="${wrapperClass}">${badges.join('')}</div>`;
+    }
+
     if (parseCompleted) {
       badges.push(`
         <span class="status-badge parsed" title="파싱 완료" aria-label="파싱 완료">
@@ -1993,6 +2007,11 @@
     postJson(`/files/api/v1/${uid}/ai/retry/`, {}).then(() => fetchFiles());
   }
 
+  function toggleAIProcessing(uid, enabled, event) {
+    if (event) event.stopPropagation();
+    postJson(`/files/api/v1/${uid}/ai/enabled/`, { enabled }).then(() => fetchFiles());
+  }
+
   function renderFiles() {
     if (searchMode === 'ai' && document.getElementById('fileSearch').value.trim() !== '') {
       // AI 모드이면서 타이핑이 된 상태면 일반 renderFiles는 중단 (AI가 덮어씌움)
@@ -2043,6 +2062,10 @@
           <button type="button" class="card-action-btn" onclick="retryAIProcessing('${file.uid}', event)">
             ${t('retry')}
           </button>` : '';
+        const aiToggleButton = `
+          <button type="button" class="card-action-btn" onclick="toggleAIProcessing('${file.uid}', ${!file.ai_processing_enabled}, event)">
+            ${file.ai_processing_enabled ? t('disableAi') : t('enableAi')}
+          </button>`;
 
         const card = document.createElement('div');
         card.className = `file-card ${selected ? 'selected' : ''}`;
@@ -2088,6 +2111,7 @@
               <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               ${t('download')}
             </a>` : `<div style="flex:1"></div>`}
+            ${aiToggleButton}
             ${retryButton}
             <form method="post" action="javascript:void(0);" onsubmit="deleteFile('${file.uid}', event)" style="flex:1;display:flex;">
               <button type="submit" class="card-action-btn danger">
@@ -2121,6 +2145,10 @@
           <button type="button" class="icon-btn retry" title="${t('retry')}" onclick="retryAIProcessing('${file.uid}', event)">
             ↻
           </button>` : '';
+        const aiToggleButton = `
+          <button type="button" class="icon-btn" title="${file.ai_processing_enabled ? t('disableAi') : t('enableAi')}" onclick="toggleAIProcessing('${file.uid}', ${!file.ai_processing_enabled}, event)">
+            AI
+          </button>`;
 
         const tr = document.createElement('tr');
         tr.className = selected ? 'selected' : '';
@@ -2164,6 +2192,7 @@
                 <a href="/files/api/v1/${file.uid}/download/" onclick="event.stopPropagation()" class="icon-btn" title="다운로드">
                   <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </a>` : ''}
+                ${aiToggleButton}
                 ${retryButton}
                 <form method="post" action="javascript:void(0);" onsubmit="deleteFile('${file.uid}', event)">
                   <button type="submit" class="icon-btn danger" title="삭제">

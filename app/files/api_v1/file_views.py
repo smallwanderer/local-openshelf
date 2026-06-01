@@ -34,6 +34,12 @@ def _node_queryset_for_uids(user, uids, *, trashed=None):
     return qs
 
 
+def _bool_from_request(value, *, default=True):
+    if value is None:
+        return default
+    return str(value).strip().lower() not in {"0", "false", "off", "no"}
+
+
 @login_required
 @email_verification_required
 @require_http_methods(["GET"])
@@ -96,6 +102,7 @@ def upload_file(request):
             file=request.FILES["file"],
             description=request.POST.get("description", ""),
             parent=parent,
+            ai_processing_enabled=_bool_from_request(request.POST.get("ai_processing_enabled"), default=True),
         )
         return JsonResponse({
             "ok": True,
@@ -547,6 +554,9 @@ def file_delete(request, uid):
 @require_http_methods(["POST"])
 def retry_ai_processing(request, uid):
     node = get_object_or_404(Node, uid=uid, owner=request.user, node_type=NodeType.FILE, trashed=False)
+    if not node.ai_processing_enabled:
+        node.ai_processing_enabled = True
+        node.save(update_fields=["ai_processing_enabled", "updated_at"])
     ai_status = node.get_ai_status() or {}
     parse_status = ai_status.get("parse_status")
     embedding_status = ai_status.get("embedding_status")
@@ -576,6 +586,24 @@ def retry_ai_processing(request, uid):
         })
 
     return JsonResponse({"ok": False, "errors": ["There is no failed AI work to retry."]}, status=400)
+
+
+@login_required
+@email_verification_required
+@require_http_methods(["POST"])
+def set_ai_processing(request, uid):
+    node = get_object_or_404(Node, uid=uid, owner=request.user, trashed=False)
+    data = _json_body(request)
+    enabled = _bool_from_request(data.get("enabled"), default=True)
+    qs = file_service._subtree_queryset(node)  # Reuse the same folder-subtree semantics as trash.
+    updated = qs.update(ai_processing_enabled=enabled)
+    node.refresh_from_db(fields=["ai_processing_enabled", "updated_at"])
+    return JsonResponse({
+        "ok": True,
+        "enabled": enabled,
+        "count": updated,
+        "file": node.to_dict(),
+    })
 
 
 @login_required

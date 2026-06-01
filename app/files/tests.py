@@ -8,6 +8,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from unittest.mock import patch
 
+from accounts.models import APIToken
 from config.enums import AIStatus, NodeType
 from document_ai.models import DocumentChunk, DocumentParseResult
 from files.models import FileBlob, Node
@@ -271,6 +272,71 @@ class StorageServiceTests(TestCase):
 
         self.assertFalse(Node.objects.filter(pk=self.node.pk).exists())
         self.assertFalse(default_storage.exists(file_name))
+
+
+@override_settings(ALLOWED_HOSTS=["testserver", "localhost"])
+class SyncApiUploadTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="sync-api@example.com",
+            password="password",
+            is_active=True,
+            email_verified=True,
+        )
+        self.token = APIToken.objects.create(user=self.user, name="test token")
+
+    def post_upload(self, file_obj, data=None):
+        payload = {
+            "file": file_obj,
+            "rel_path": "docs/report.txt",
+            "folder_name": "local",
+            "content_hash": "hash",
+        }
+        if data:
+            payload.update(data)
+        return self.client.post(
+            "/api/sync/v1/upload/",
+            data=payload,
+            HTTP_AUTHORIZATION=f"Bearer {self.token.key}",
+        )
+
+    def test_sync_upload_can_disable_ai_processing(self):
+        upload = SimpleUploadedFile("report.txt", b"sync", content_type="text/plain")
+
+        with patch("document_ai.signals.parse_document_with_docling.delay") as delay:
+            response = self.post_upload(upload, {"ai_processing_enabled": "0"})
+
+        self.assertEqual(response.status_code, 200)
+        node = Node.objects.get(uid=response.json()["node_uid"])
+        self.assertFalse(node.ai_processing_enabled)
+        delay.assert_not_called()
+
+    def test_sync_update_preserves_existing_ai_setting_when_omitted(self):
+        sync_root = Node.objects.create(owner=self.user, name="sync", ext="", node_type=NodeType.FOLDER)
+        sync_folder = Node.objects.create(owner=self.user, name="local", ext="", node_type=NodeType.FOLDER, parent=sync_root)
+        parent = Node.objects.create(owner=self.user, name="docs", ext="", node_type=NodeType.FOLDER, parent=sync_folder)
+        node = Node.objects.create(
+            owner=self.user,
+            name="report.txt",
+            ext=".txt",
+            node_type=NodeType.FILE,
+            parent=parent,
+            ai_processing_enabled=False,
+        )
+        FileBlob.objects.create(
+            node=node,
+            file=SimpleUploadedFile("old.txt", b"old", content_type="text/plain"),
+            original_name="report.txt",
+            size=3,
+            mime_type="text/plain",
+            sha256="old",
+        )
+
+        response = self.post_upload(SimpleUploadedFile("report.txt", b"new", content_type="text/plain"))
+
+        self.assertEqual(response.status_code, 200)
+        node.refresh_from_db()
+        self.assertFalse(node.ai_processing_enabled)
 
 
 @override_settings(ALLOWED_HOSTS=["testserver", "localhost"])

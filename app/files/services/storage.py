@@ -83,7 +83,7 @@ def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValid
     )
 
 
-def save_file(owner: AbstractBaseUser, file: File, description: str, parent=None) -> Node:
+def save_file(owner: AbstractBaseUser, file: File, description: str, parent=None, ai_processing_enabled: bool = True) -> Node:
     sha256 = calculate_sha256(file)
     file.seek(0)
 
@@ -95,6 +95,7 @@ def save_file(owner: AbstractBaseUser, file: File, description: str, parent=None
             ext=extract_ext(file.name),
             node_type=NodeType.FILE,
             description=description,
+            ai_processing_enabled=ai_processing_enabled,
         )
 
         FileBlob.objects.create(

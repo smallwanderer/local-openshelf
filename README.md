@@ -19,7 +19,7 @@ OpenShelf helps you keep documents in a private web workspace and ask questions 
 
 ## Current Release
 
-`0.1.0-alpha` is a pre-release. The core RAG and retrieval workflow is usable, but some advanced features remain experimental.
+`0.1.1` is a source-based early release. Core file management, document parsing and embedding, AI search, and RAG flows are usable, while deployment automation and some advanced features are still being improved.
 
 This release is source-based. Docker images are not published yet. Deploy by checking out the release tag and building with Docker Compose.
 
@@ -65,6 +65,8 @@ The web container stays lightweight. Heavy parsing, embedding, retrieval, and LL
 - RAG question workspace with citation display.
 - Embedding-based contextual compression for search and RAG evidence.
 - Local desktop sync API groundwork for Shelf-Sync.
+- Per-file and per-folder controls for AI parsing and embedding.
+- Saved Korean/English interface language preference.
 - Django admin extensions for operational visibility.
 - Experimental QueryDSL parser path with validation and fallback behavior.
 
@@ -145,11 +147,14 @@ Run the CI-style unit test command:
 docker compose -f docker-compose.dev.yml run --rm celery-core-worker python -m pytest -m "unit"
 ```
 
-Run broader development tests from the dev app container:
+Run web/API focused development checks from the dev app container:
 
 ```bash
-docker compose -f docker-compose.dev.yml exec app python -m pytest
+docker compose -f docker-compose.dev.yml exec app python manage.py check
+docker compose -f docker-compose.dev.yml exec app python -m pytest --reuse-db files/tests.py tests/test_rag_flow.py
 ```
+
+The web `app` container intentionally stays light. Docling-based tests should run in `celery-core-worker`.
 
 ## Operational Notes
 
@@ -161,6 +166,15 @@ docker compose -f docker-compose.dev.yml exec app python -m pytest
 - QueryDSL parsing is experimental. The default search/RAG path still uses semantic query passthrough.
 
 ## Release Notes
+
+For `0.1.1`, the main focus is:
+
+- Added user settings and persisted interface language preference.
+- Expanded Korean/English language switching across file, upload, and RAG surfaces.
+- Added UI and API controls to disable or re-enable AI processing for files and folders.
+- Excluded trashed nodes from AI processing and kept restored nodes disabled until explicitly re-enabled.
+- Added `ai_processing_enabled` support to the Shelf-Sync upload API.
+- Prevented disabled files from being queued or recovered for parsing and embedding.
 
 For `0.1.0-alpha`, the main focus is:
 
