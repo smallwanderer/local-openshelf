@@ -3,7 +3,7 @@
 **OpenShelf is a lightweight full-stack document retriever and RAG system for personal and small-team use.**
 
 <p align="center">
- <img src = "[https://github.com/user-attachments/assets/263cba6d-04f6-49ba-9ccb-85481157539a](https://github.com/user-attachments/assets/4a127a20-180e-4ee4-88ef-ff3e781d3df0)", width="80%">
+ <img src = "https://github.com/user-attachments/assets/4a127a20-180e-4ee4-88ef-ff3e781d3df0", width="80%">
 </p>
 
 It combines file storage, document parsing, hybrid vector retrieval, and retrieval-augmented generation in a Docker Compose stack that can run on a server or a Windows machine with Docker Desktop.
