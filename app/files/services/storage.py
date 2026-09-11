@@ -2,7 +2,7 @@ from django.contrib.auth.models import AbstractBaseUser
 from django.core.files.base import File
 from django.core.files.storage import default_storage
 from django.http import FileResponse
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 import dataclasses
 import os
@@ -27,6 +27,9 @@ ALLOWED_EXTENSIONS = {
 MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
 
 
+MAX_RENAME_ATTEMPTS = 200
+
+
 @dataclasses.dataclass
 class UploadValidationResult:
     ok: bool
@@ -35,7 +38,7 @@ class UploadValidationResult:
     duplicate: bool = False
 
 
-def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValidationResult:
+def validate_upload(workspace, owner: AbstractBaseUser, uploaded_file: File) -> UploadValidationResult:
     warnings = []
     errors = []
 
@@ -51,7 +54,10 @@ def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValid
             errors=["The file exceeds the 2 GB upload limit."],
         )
 
-    storage, _ = UserStorage.objects.get_or_create(user=owner)
+    storage, _ = UserStorage.objects.get_or_create(
+        workspace=workspace,
+        defaults={"user": workspace.created_by},
+    )
     if storage.used_size + uploaded_file.size > storage.total_size:
         remaining_mb = round(storage.remaining_size / 1024 / 1024, 2)
         return UploadValidationResult(
@@ -71,7 +77,7 @@ def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValid
         warnings.append("The file MIME type could not be verified.")
 
     sha256 = calculate_sha256(uploaded_file)
-    duplicate = FileBlob.objects.filter(node__owner=owner, sha256=sha256).exists()
+    duplicate = FileBlob.objects.filter(node__workspace=workspace, sha256=sha256).exists()
     if duplicate:
         warnings.append("A file with the same content already exists.")
 
@@ -83,31 +89,45 @@ def validate_upload(owner: AbstractBaseUser, uploaded_file: File) -> UploadValid
     )
 
 
-def save_file(owner: AbstractBaseUser, file: File, description: str, parent=None, ai_processing_enabled: bool = True) -> Node:
+def _name_candidates(name: str):
+    stem, ext = os.path.splitext(name)
+    yield name
+    for counter in range(1, MAX_RENAME_ATTEMPTS + 1):
+        yield f"{stem} ({counter}){ext}"
+
+
+def save_file(workspace, owner: AbstractBaseUser, file: File, description: str, parent=None, ai_processing_enabled: bool = True) -> Node:
     sha256 = calculate_sha256(file)
-    file.seek(0)
+    original_name = file.name
 
-    with transaction.atomic():
-        node = Node.objects.create(
-            owner=owner,
-            parent=parent,
-            name=file.name,
-            ext=extract_ext(file.name),
-            node_type=NodeType.FILE,
-            description=description,
-            ai_processing_enabled=ai_processing_enabled,
-        )
+    for candidate_name in _name_candidates(original_name):
+        file.seek(0)
+        try:
+            with transaction.atomic():
+                node = Node.objects.create(
+                    workspace=workspace,
+                    owner=owner,
+                    parent=parent,
+                    name=candidate_name,
+                    ext=extract_ext(candidate_name),
+                    node_type=NodeType.FILE,
+                    description=description,
+                    ai_processing_enabled=ai_processing_enabled,
+                )
 
-        FileBlob.objects.create(
-            node=node,
-            file=file,
-            original_name=file.name,
-            size=file.size,
-            mime_type=getattr(file, "content_type", ""),
-            sha256=sha256,
-        )
+                FileBlob.objects.create(
+                    node=node,
+                    file=file,
+                    original_name=original_name,
+                    size=file.size,
+                    mime_type=getattr(file, "content_type", ""),
+                    sha256=sha256,
+                )
+        except IntegrityError:
+            continue
+        return node
 
-    return node
+    raise ValueError("Could not find an available name for this file.")
 
 
 def _coerce_node(file_or_node) -> Node:
@@ -157,5 +177,5 @@ def get_file(file_or_node):
     return _coerce_node(file_or_node)
 
 
-def get_files(user):
-    return Node.objects.filter(owner=user, node_type=NodeType.FILE, trashed=False).order_by("-created_at")
+def get_files(workspace):
+    return Node.objects.filter(workspace=workspace, node_type=NodeType.FILE, trashed=False).order_by("-created_at")

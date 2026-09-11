@@ -11,16 +11,37 @@ if TYPE_CHECKING:
     from llm_installation.runtime_lifecycle import RuntimeSpec
 
 
-SCOPES = ("production", "development")
+SCOPES = ("production",)
 MODES = ("rag", "search", "basic")
 NETWORK_ACCESS_MODES = ("local", "direct_https")
 CORE_SERVICES = ("db", "redis", "app")
-ALL_WORKER_SERVICES = (
-    "embedding-worker",
-    "search-worker",
-    "rag-worker",
-    "recovery-worker",
-)
+DOCUMENT_MODEL_SERVICE = "embedding-executor"
+DOCUMENT_QUEUE_SERVICES = ("dotori-orchestrator",)
+DOCUMENT_EXECUTOR_SERVICES = ("parser-executor", "embedding-executor")
+# Kept under the existing public name because install.py and saved deployment
+# tooling already import it. It represents every non-core Compose service that
+# must follow the document-processing lifecycle, including the model endpoint.
+ALL_WORKER_SERVICES = (*DOCUMENT_EXECUTOR_SERVICES, *DOCUMENT_QUEUE_SERVICES)
+DOCUMENT_RUNTIME_RESTART_SERVICES = ("app", *ALL_WORKER_SERVICES)
+
+
+def worker_services_for_lifecycle(saved_plan: dict | None = None) -> tuple[str, ...]:
+    """Return every current service represented by a persisted plan.
+
+    Deployment plans are persisted across upgrades. A plan written before the
+    parse/embed split only contains the legacy dotori-document service, so lifecycle operations
+    must not treat that old snapshot as the complete current topology. Removed
+    service names are ignored because Compose cannot stop an undefined service.
+    """
+    planned_services: list[str] = []
+    if saved_plan:
+        planned_services = [
+            worker.get("compose_service")
+            for worker in saved_plan.get("workers", [])
+            if worker.get("enabled")
+            and worker.get("compose_service") in ALL_WORKER_SERVICES
+        ]
+    return tuple(dict.fromkeys((*planned_services, *ALL_WORKER_SERVICES)))
 
 
 def compose_up_command(
@@ -32,11 +53,56 @@ def compose_up_command(
 ) -> str:
     """Build the explicit fast-start or maintenance rebuild command."""
     build_flag = "--build" if build_images else "--no-build"
-    parts = [compose_command, "up", build_flag]
+    parts = [compose_command, "up", build_flag, "--remove-orphans"]
     if force_recreate:
         parts.append("--force-recreate")
     parts.extend(["-d", *services])
     return " ".join(parts)
+
+
+def embedding_runtime_change_command(
+    compose_command: str,
+    *,
+    scope: str,
+    priority_preset: str = "balanced",
+    catalog_id: str | None = None,
+    candidate_generation_id: str | None = None,
+    force_reembed: bool = False,
+    skip_reembed: bool = False,
+    activate: bool = True,
+) -> str:
+    """Build the one-off model-owner command for a candidate generation.
+
+    The regular app image deliberately excludes local model dependencies, and
+    the running model endpoint is pinned to the active runtime. The candidate
+    must therefore be built in the AI image with in-process model ownership.
+    The service's normal config mount is read-only, so this maintenance command
+    explicitly replaces it with the writable host config mount.
+    """
+    args = [f"--scope {scope}"]
+    if candidate_generation_id:
+        args.append(f"--candidate-generation-id {candidate_generation_id}")
+    elif catalog_id:
+        args.append(f"--catalog-id {catalog_id}")
+    else:
+        args.append(f"--preset {priority_preset}")
+
+    if activate:
+        args.append("--activate")
+    if force_reembed:
+        args.append("--force-reembed")
+    if skip_reembed:
+        args.append("--skip-reembed")
+
+    args_str = " ".join(args)
+    return (
+        f"{compose_command} run --rm "
+        "-e DOTORI_EMBEDDING_MODEL_PROCESS=1 "
+        "-v ./data/config:/data/config "
+        "-v ./app:/app "
+        f"{DOCUMENT_MODEL_SERVICE} python manage.py change_embedding_runtime "
+        f"{args_str}"
+    )
 
 
 @dataclass(frozen=True)
@@ -58,7 +124,7 @@ class WorkerSpec:
             raise ValueError("Worker concurrency must be at least 1.")
         if self.prefetch_multiplier < 1:
             raise ValueError("Worker prefetch multiplier must be at least 1.")
-        if not self.queues and self.health_strategy != "celery-beat":
+        if not self.queues and self.health_strategy == "celery-ping":
             raise ValueError("A queue worker must consume at least one queue.")
 
     def as_dict(self) -> dict:
@@ -142,48 +208,37 @@ def _worker_specs(mode: str, *, runtime_available: bool) -> tuple[WorkerSpec, ..
     ai_enabled = mode in {"rag", "search"}
     return (
         WorkerSpec(
-            name="embedding",
-            compose_service="embedding-worker",
-            queues=("parse", "embed"),
-            concurrency=1,
-            prefetch_multiplier=1,
-            enabled=ai_enabled,
-            requires_runtime=False,
-            dependencies=("db", "redis"),
-            health_strategy="celery-ping",
-        ),
-        WorkerSpec(
-            name="search",
-            compose_service="search-worker",
-            queues=("search",),
-            concurrency=1,
-            prefetch_multiplier=1,
-            enabled=ai_enabled,
-            requires_runtime=False,
-            dependencies=("db", "redis", "embedding-worker"),
-            health_strategy="celery-ping",
-        ),
-        WorkerSpec(
-            name="rag",
-            compose_service="rag-worker",
-            queues=("rag",),
-            concurrency=1,
-            prefetch_multiplier=1,
-            enabled=mode == "rag" and runtime_available,
-            requires_runtime=True,
-            dependencies=("db", "redis", "rag-runtime"),
-            health_strategy="celery-ping",
-        ),
-        WorkerSpec(
-            name="recovery",
-            compose_service="recovery-worker",
+            name="parser-executor",
+            compose_service="parser-executor",
             queues=(),
             concurrency=1,
             prefetch_multiplier=1,
             enabled=ai_enabled,
             requires_runtime=False,
             dependencies=("db", "redis"),
-            health_strategy="celery-beat",
+            health_strategy="http-readyz",
+        ),
+        WorkerSpec(
+            name="embedding-executor",
+            compose_service=DOCUMENT_MODEL_SERVICE,
+            queues=(),
+            concurrency=1,
+            prefetch_multiplier=1,
+            enabled=ai_enabled,
+            requires_runtime=False,
+            dependencies=("db", "redis"),
+            health_strategy="http-readyz",
+        ),
+        WorkerSpec(
+            name="orchestrator",
+            compose_service=DOCUMENT_QUEUE_SERVICES[0],
+            queues=("parse", "embed"),
+            concurrency=2,
+            prefetch_multiplier=1,
+            enabled=ai_enabled,
+            requires_runtime=False,
+            dependencies=("db", "redis", "parser-executor", DOCUMENT_MODEL_SERVICE),
+            health_strategy="celery-ping",
         ),
     )
 

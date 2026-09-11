@@ -1,0 +1,13 @@
+{
+  "id": "openai-text-embedding-3-small",
+  "display_name": "OpenAI text-embedding-3-small",
+  "description": "OpenAI 3rd generation small embedding model via OpenAI-compatible API.",
+  "license": "commercial",
+  "repo_id": "openai/text-embedding-3-small",
+  "revision": "main000",
+  "tokenizer_id": "cl100k_base",
+  "tokenizer_revision": "main000",
+  "dimension": 1536,
+  "model_input_max_tokens": 8191,
+  "languages": ["ko", "en", "zh", "ja", "multilingual"]
+}

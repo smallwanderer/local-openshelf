@@ -1,0 +1,15 @@
+{
+  "id": "granite-278m",
+  "model_id": "granite-embedding-278m",
+  "provider": "sentence_transformers",
+  "store": "pgvector_chunk_768",
+  "dimension": 768,
+  "supports_sparse": false,
+  "normalize_embeddings": true,
+  "distance_strategy": "inner_product",
+  "query_prefix": "",
+  "document_prefix": "",
+  "availability": "supported",
+  "priority": 70,
+  "presets": []
+}

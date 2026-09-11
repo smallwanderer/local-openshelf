@@ -1,9 +1,12 @@
 from rest_framework import serializers
 from django.conf import settings
 
-from document_ai.models import RAGJob, SearchJob
-
 class VectorSearchRequestSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(
+        choices=["basic", "advanced"],
+        default="advanced",
+        help_text="두 값 모두 입력 질의를 직접 검색합니다 (advanced의 query-understanding 파이프라인은 평가 후 폐기됨).",
+    )
     query = serializers.CharField(
         required=True, 
         help_text="검색할 질문이나 키워드"
@@ -76,33 +79,11 @@ class VectorSearchResponseSerializer(serializers.Serializer):
     evidences = serializers.ListField(child=EvidenceSerializer())
 
 
-class SearchJobCreateResponseSerializer(serializers.Serializer):
-    job_id = serializers.IntegerField()
-    status = serializers.CharField()
-    poll_url = serializers.CharField()
+class SynchronousSearchResponseSerializer(serializers.Serializer):
+    results = VectorSearchResponseSerializer(many=True)
+    performance_metrics = serializers.DictField()
+    query_plan = serializers.DictField(required=False)
 
-
-class SearchJobSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SearchJob
-        fields = [
-            "id",
-            "query_log",
-            "query",
-            "top_k",
-            "threshold",
-            "node_ids",
-            "tuning_params",
-            "status",
-            "task_id",
-            "results",
-            "error_message",
-            "performance_metrics",
-            "created_at",
-            "started_at",
-            "completed_at",
-            "updated_at",
-        ]
 
 class VectorTuningRequestSerializer(serializers.Serializer):
     query = serializers.CharField(required=True)
@@ -131,102 +112,3 @@ class RAGRequestSerializer(serializers.Serializer):
         required=False,
         help_text="특정 파일 또는 폴더(Node) 범위에서만 RAG 답변을 생성할 경우 ID 리스트",
     )
-
-
-class RAGJobCreateResponseSerializer(serializers.Serializer):
-    job_id = serializers.IntegerField()
-    search_job_id = serializers.IntegerField(allow_null=True)
-    status = serializers.CharField()
-    stage = serializers.CharField()
-    stage_message = serializers.CharField()
-    poll_url = serializers.CharField()
-
-
-class RAGJobSerializer(serializers.ModelSerializer):
-    search_status = serializers.SerializerMethodField()
-    search_results = serializers.SerializerMethodField()
-    stage_label = serializers.SerializerMethodField()
-    progress = serializers.SerializerMethodField()
-    effective_endpoint = serializers.SerializerMethodField()
-    effective_model = serializers.SerializerMethodField()
-    can_cancel = serializers.SerializerMethodField()
-
-    class Meta:
-        model = RAGJob
-        fields = [
-            "id",
-            "question",
-            "retrieval_query",
-            "query_intent",
-            "answer_mode",
-            "retrieval_required",
-            "query_confidence",
-            "top_k",
-            "language",
-            "node_ids",
-            "llm_endpoint_name",
-            "llm_base_url",
-            "llm_model",
-            "status",
-            "stage",
-            "stage_message",
-            "stage_label",
-            "progress",
-            "effective_endpoint",
-            "effective_model",
-            "can_cancel",
-            "task_id",
-            "answer",
-            "citations",
-            "error_message",
-            "performance_metrics",
-            "cancel_requested_at",
-            "canceled_at",
-            "cancel_reason",
-            "search_job",
-            "search_status",
-            "search_results",
-            "created_at",
-            "started_at",
-            "completed_at",
-            "updated_at",
-        ]
-
-    def get_search_status(self, obj):
-        return obj.search_job.status if obj.search_job_id else None
-
-    def get_search_results(self, obj):
-        if obj.search_job_id and obj.search_job.status == "completed":
-            return obj.search_job.results
-        return []
-
-    def get_stage_label(self, obj):
-        labels = {
-            "queued": "작업 대기 중",
-            "searching": "문서에서 관련 근거 검색 중",
-            "generating": "선택한 모델로 답변 생성 중",
-            "completed": "답변 완료",
-            "failed": "실패",
-            "canceled": "중단됨",
-        }
-        return labels.get(obj.stage, obj.stage)
-
-    def get_progress(self, obj):
-        progress = {
-            "queued": 10,
-            "searching": 35,
-            "generating": 70,
-            "completed": 100,
-            "failed": 100,
-            "canceled": 100,
-        }
-        return progress.get(obj.stage, 0)
-
-    def get_effective_endpoint(self, obj):
-        return obj.llm_endpoint_name or "Server default"
-
-    def get_effective_model(self, obj):
-        return obj.llm_model
-
-    def get_can_cancel(self, obj):
-        return obj.status in {"pending", "processing"} and obj.stage not in {"completed", "failed", "canceled"}

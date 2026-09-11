@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from document_ai.services.rag_runtime_config import load_llm_runtime_config
+from llm_installation.memory_reservations import CLAIM_LLM, clear_claim
 from llm_installation.runtime_lifecycle import RuntimeLifecycleManager, get_repo_root
 
 RUNTIME_CACHE_SUBPATH = {
@@ -94,6 +95,11 @@ def remove_current_llm_runtime(
         messages.append(message)
     elif not info:
         messages.append("No resolvable runtime/model in the current config; skipped weight cleanup.")
+
+    # Removal is the only event that releases the memory claim -- a stopped or
+    # unhealthy runtime keeps its hold, because it is expected to start again.
+    if clear_claim(CLAIM_LLM, scope=scope, repo_root=root) is not None:
+        messages.append("Released the LLM memory reservation.")
 
     return {
         "had_config": bool(payload),

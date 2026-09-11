@@ -49,6 +49,7 @@ def check_file_io_pipeline() -> dict:
     """Exercise the real save_file -> open_file -> delete_file pipeline and clean up after itself."""
     started = time.monotonic()
     owner = _get_or_create_healthcheck_owner()
+    workspace = owner.workspace_memberships.get(workspace__kind="personal").workspace
 
     for stale in Node.objects.filter(owner=owner, name__startswith=HEALTHCHECK_FILE_PREFIX):
         try:
@@ -61,6 +62,7 @@ def check_file_io_pipeline() -> dict:
     node = None
     try:
         node = storage_service.save_file(
+            workspace=workspace,
             owner=owner,
             file=upload,
             description="server_status healthcheck",
@@ -136,6 +138,29 @@ def _embedding_status() -> dict:
     }
 
 
+def _memory_reservations_status() -> dict:
+    """Report what each workload currently claims, plus the sum.
+
+    The total is computed here rather than read from disk: it must never be
+    able to disagree with the claims it came from.
+    """
+    from llm_installation.memory_reservations import (
+        get_total_reservation,
+        read_reservations,
+    )
+
+    scope = os.getenv("RUNTIME_SCOPE", "production")
+    claims = read_reservations(scope)
+    total = get_total_reservation(scope)
+    return {
+        "scope": scope,
+        "claims": {
+            workload: claim.as_dict() for workload, claim in sorted(claims.items())
+        },
+        "total": total.as_dict(),
+    }
+
+
 def _rag_status(*, timeout: int) -> dict:
     # There's no reliable "operator wants RAG on" signal to read (the RAG
     # operation mode isn't recorded in an env var), so "enabled" mirrors
@@ -207,6 +232,7 @@ class Command(BaseCommand):
                 "embedding": _embedding_status(),
                 "rag": _rag_status(timeout=options["endpoint_timeout"]),
             },
+            "memory_reservations": _memory_reservations_status(),
         }
 
         if options["json_output"]:
@@ -256,3 +282,43 @@ class Command(BaseCommand):
                 self.stdout.write(f"  health_status: ok={health['ok']} ({health['message']})")
         else:
             self.stdout.write(f"rag: {rag.get('message')}")
+
+        reservations = payload["memory_reservations"]
+        self.stdout.write("")
+        self.stdout.write(f"Memory reservations (scope: {reservations['scope']})")
+        if not reservations["claims"]:
+            self.stdout.write("no workload has claimed memory yet")
+        else:
+            for workload, claim in reservations["claims"].items():
+                vram = claim["vram_per_gpu_mb"]
+                vram_text = (
+                    ", ".join(f"gpu{index}={value} MB" for index, value in enumerate(vram))
+                    if vram
+                    else "-"
+                )
+                self.stdout.write(
+                    f"{workload}: device={claim['device']} ram={claim['ram_mb']} MB "
+                    f"vram={vram_text} source={claim['source']}"
+                )
+                components = claim.get("components") or {}
+                if components:
+                    detail = " ".join(
+                        f"{key}={value}" for key, value in sorted(components.items())
+                    )
+                    self.stdout.write(f"  components: {detail}")
+                bounds = claim.get("bounds") or {}
+                if bounds:
+                    detail = " ".join(
+                        f"{key}={value}" for key, value in sorted(bounds.items())
+                    )
+                    self.stdout.write(f"  bounds: {detail}")
+            total = reservations["total"]
+            total_vram = total["vram_per_gpu_mb"]
+            total_vram_text = (
+                ", ".join(f"gpu{index}={value} MB" for index, value in enumerate(total_vram))
+                if total_vram
+                else "-"
+            )
+            self.stdout.write(
+                f"total: ram={total['ram_mb']} MB vram={total_vram_text}"
+            )

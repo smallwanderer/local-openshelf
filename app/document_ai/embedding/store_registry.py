@@ -8,6 +8,10 @@ from document_ai.services.embedding_runtime_config import (
 
 _STORE_FACTORIES = {
     PgVectorChunkEmbeddingStore.name: PgVectorChunkEmbeddingStore,
+    "pgvector_chunk_640": PgVectorChunkEmbeddingStore,
+    "pgvector_chunk_768": PgVectorChunkEmbeddingStore,
+    "pgvector_chunk_1536": PgVectorChunkEmbeddingStore,
+    "pgvector_chunk_384": PgVectorChunkEmbeddingStore,
 }
 
 
@@ -54,6 +58,7 @@ def get_embedding_store_instance(
         runtime_fingerprint=resolved_runtime.runtime_fingerprint,
         scope=resolved_runtime.scope,
         catalog_id=resolved_runtime.catalog_id,
+        store_name=resolved_store_name,
     )
 
 

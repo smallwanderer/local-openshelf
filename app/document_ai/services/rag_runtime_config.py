@@ -6,8 +6,71 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from llm_installation.runtime_probe import EndpointStatus, SmokeTestStatus
+
+
+DEFAULT_SERVING_CONCURRENCY = 1
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 1 else None
+
+
+def normalize_serving_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a backward-compatible runtime/admission concurrency profile.
+
+    Older profiles used ``concurrency`` for the preset- and memory-derived
+    capacity.  That value is retained as the safe ceiling, while an
+    uncalibrated install starts with one active sequence.  Runtime arguments
+    and application admission consume the normalized operating value.
+    """
+    if not isinstance(profile, dict):
+        return {}
+
+    normalized = dict(profile)
+    safe_ceiling = (
+        _positive_int(profile.get("safe_concurrency_ceiling"))
+        or _positive_int(profile.get("concurrency"))
+        or _positive_int(profile.get("parallel"))
+        or _positive_int(profile.get("max_num_seqs"))
+        or DEFAULT_SERVING_CONCURRENCY
+    )
+    serving_concurrency = (
+        _positive_int(profile.get("serving_concurrency"))
+        or DEFAULT_SERVING_CONCURRENCY
+    )
+    serving_concurrency = min(serving_concurrency, safe_ceiling)
+
+    normalized.update(
+        {
+            "safe_concurrency_ceiling": safe_ceiling,
+            "serving_concurrency": serving_concurrency,
+            "calibration_status": str(
+                profile.get("calibration_status") or "pending"
+            ),
+            # Compatibility fields describe the active runtime, not the
+            # larger memory-safe calibration range.
+            "concurrency": serving_concurrency,
+            "parallel": serving_concurrency,
+            "max_num_seqs": serving_concurrency,
+        }
+    )
+    context_length = _positive_int(profile.get("context_length"))
+    if context_length is not None:
+        normalized["server_ctx_size"] = context_length * serving_concurrency
+        normalized["max_num_batched_tokens"] = (
+            context_length * serving_concurrency
+        )
+    return normalized
 
 
 def get_llm_runtime_config_path(
@@ -86,6 +149,17 @@ def server_rag_runtime_availability() -> tuple[bool, dict[str, Any]]:
     return runtime_status.get("status") == "healthy", runtime_status
 
 
+def probe_server_rag_runtime(target: "ServerRAGTarget", *, timeout: float = 1.0) -> bool:
+    """Perform a shallow liveness probe for the read-only server status UI."""
+    health_url = f"{target.base_url.rstrip('/')}/health"
+    request = Request(health_url, headers={"Accept": "application/json"})
+    try:
+        with urlopen(request, timeout=max(0.1, min(float(timeout), 3.0))) as response:
+            return 200 <= int(response.status) < 300
+    except (HTTPError, URLError, OSError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class ServerRAGTarget:
     endpoint_name: str
@@ -103,6 +177,14 @@ class ServerRAGTarget:
     selection_reason_code: str = ""
     runtime_policy_input: dict[str, Any] | None = None
     serving_profile: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.serving_profile is not None:
+            object.__setattr__(
+                self,
+                "serving_profile",
+                normalize_serving_profile(self.serving_profile),
+            )
 
     def as_snapshot(self) -> dict:
         return {
@@ -167,3 +249,15 @@ def get_cached_server_rag_target() -> ServerRAGTarget:
 
 def clear_server_rag_target_cache() -> None:
     get_cached_server_rag_target.cache_clear()
+
+
+def get_server_rag_serving_concurrency() -> int:
+    """Read the active server-wide LLM admission limit without probing hardware."""
+    target = target_from_persisted_config()
+    if target is None or not target.serving_profile:
+        return DEFAULT_SERVING_CONCURRENCY
+    return int(
+        target.serving_profile.get(
+            "serving_concurrency", DEFAULT_SERVING_CONCURRENCY
+        )
+    )

@@ -7,12 +7,18 @@ from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 
-from config.enums import AIStatus, FileLanguage, FileStatus, NodeType
+from config.enums import AIStatus, FileLanguage, FileOperation, FileStatus, NodeType
 
 
 class Node(models.Model):
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="owned_nodes",
+    )
+    workspace = models.ForeignKey(
+        "workspaces.Workspace",
         on_delete=models.CASCADE,
         related_name="nodes",
     )
@@ -47,16 +53,15 @@ class Node(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["owner", "parent"]),
-            models.Index(fields=["owner", "trashed"]),
-            models.Index(fields=["owner", "node_type"]),
-            models.Index(fields=["owner", "-created_at"]),
-            models.Index(fields=["owner", "path"]),
+            models.Index(fields=["workspace", "parent"], name="node_workspace_parent_idx"),
+            models.Index(fields=["workspace", "trashed"], name="node_workspace_trashed_idx"),
+            models.Index(fields=["workspace", "node_type"], name="node_workspace_type_idx"),
+            models.Index(fields=["workspace", "-created_at"], name="node_workspace_created_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["owner", "path"],
-                name="uniq_node_path_per_owner",
+                fields=["workspace", "path"],
+                name="uniq_node_path_per_workspace",
             )
         ]
 
@@ -122,6 +127,21 @@ class Node(models.Model):
         if not self.is_file:
             return None
 
+        from document_ai.services.embedding_runtime_config import (
+            EmbeddingRuntimeConfigError,
+            get_active_embedding_runtime,
+        )
+
+        try:
+            active_runtime = get_active_embedding_runtime()
+            active_generation_id = active_runtime.generation_id
+            active_runtime_fingerprint = active_runtime.runtime_fingerprint
+            runtime_configured = True
+        except EmbeddingRuntimeConfigError:
+            active_generation_id = ""
+            active_runtime_fingerprint = ""
+            runtime_configured = False
+
         parse_status = AIStatus.PENDING
         parse_label = "Parsing queued"
         embedding_status = AIStatus.PENDING
@@ -132,6 +152,8 @@ class Node(models.Model):
         pending_chunks = 0
         failed_chunks = 0
         embedding_backend = None
+        embedding_contract_status = "missing"
+        embedded_generation_ids = []
 
         if not hasattr(self, "parse_result"):
             return {
@@ -146,6 +168,12 @@ class Node(models.Model):
                 "pending_chunks": pending_chunks,
                 "failed_chunks": failed_chunks,
                 "embedding_backend": embedding_backend,
+                "embedding_contract_status": embedding_contract_status,
+                "active_embedding_generation_id": active_generation_id,
+                "active_embedding_runtime_fingerprint": active_runtime_fingerprint,
+                "embedded_generation_ids": embedded_generation_ids,
+                "reembedding_required": False,
+                "searchable": False,
             }
 
         parse_result = self.parse_result
@@ -171,10 +199,10 @@ class Node(models.Model):
             prefetched_chunks = getattr(parse_result, "_prefetched_objects_cache", {}).get("chunks")
             if prefetched_chunks is not None:
                 chunk_count = len(prefetched_chunks) or chunk_count
-                completed_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.COMPLETED)
                 processing_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.PROCESSING)
                 pending_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.PENDING)
-                failed_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.FAILED)
+                chunk_failed_count = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.FAILED)
+                chunk_completed_count = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.COMPLETED)
             else:
                 chunk_counts = parse_result.chunks.aggregate(
                     total=models.Count("id"),
@@ -185,28 +213,58 @@ class Node(models.Model):
                 )
 
                 chunk_count = chunk_counts["total"] or chunk_count
-                completed_chunks = chunk_counts["completed"] or 0
                 processing_chunks = chunk_counts["processing"] or 0
                 pending_chunks = chunk_counts["pending"] or 0
-                failed_chunks = chunk_counts["failed"] or 0
+                chunk_failed_count = chunk_counts["failed"] or 0
+                chunk_completed_count = chunk_counts["completed"] or 0
+
+            stored_generation_id = parse_result.embedding_generation_id
+            stored_fingerprint = parse_result.embedding_runtime_fingerprint
+            embedded_generation_ids = [stored_generation_id] if stored_generation_id else []
+            contract_matches = (
+                stored_generation_id == active_generation_id
+                and (
+                    not stored_fingerprint
+                    or stored_fingerprint == active_runtime_fingerprint
+                )
+            )
+            completed_chunks = chunk_completed_count if contract_matches else 0
+            failed_chunks = chunk_failed_count if contract_matches else 0
 
             if chunk_count == 0:
                 embedding_status = AIStatus.PENDING
                 embedding_label = "No chunks available for embedding"
-            elif completed_chunks == chunk_count:
+                embedding_contract_status = "missing"
+            elif not runtime_configured:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Active embedding contract is invalid"
+                embedding_contract_status = "invalid_config"
+            elif contract_matches and completed_chunks == chunk_count:
                 embedding_status = AIStatus.COMPLETED
                 embedding_label = f"Embedding completed ({completed_chunks}/{chunk_count} chunks)"
-            elif failed_chunks > 0 and completed_chunks + failed_chunks == chunk_count:
+                embedding_contract_status = "current"
+            elif contract_matches and failed_chunks > 0 and completed_chunks + failed_chunks == chunk_count:
                 embedding_status = AIStatus.FAILED
                 embedding_label = (
                     f"Embedding finished with failures ({completed_chunks}/{chunk_count} chunks completed)"
                 )
-            elif processing_chunks > 0 or completed_chunks > 0 or failed_chunks > 0:
+                embedding_contract_status = "failed"
+            elif processing_chunks > 0 or pending_chunks > 0:
                 embedding_status = AIStatus.PROCESSING
                 embedding_label = f"Embedding in progress ({completed_chunks}/{chunk_count} chunks completed)"
+                embedding_contract_status = "reembedding"
+            elif stored_generation_id and not contract_matches:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Embedding contract is outdated; re-embedding is required"
+                embedding_contract_status = "stale_contract"
+            elif chunk_failed_count > 0:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Embedding failed"
+                embedding_contract_status = "failed"
             else:
                 embedding_status = AIStatus.PENDING
                 embedding_label = f"Embedding queued ({pending_chunks}/{chunk_count} chunks pending)"
+                embedding_contract_status = "missing"
 
         return {
             "parse_status": parse_status,
@@ -220,6 +278,15 @@ class Node(models.Model):
             "pending_chunks": pending_chunks,
             "failed_chunks": failed_chunks,
             "embedding_backend": embedding_backend,
+            "embedding_contract_status": embedding_contract_status,
+            "active_embedding_generation_id": active_generation_id,
+            "active_embedding_runtime_fingerprint": active_runtime_fingerprint,
+            "embedded_generation_ids": embedded_generation_ids,
+            "reembedding_required": embedding_contract_status
+            in {"stale_contract", "failed", "missing"}
+            and parse_status == AIStatus.COMPLETED
+            and chunk_count > 0,
+            "searchable": embedding_contract_status == "current",
         }
 
     @property
@@ -244,8 +311,21 @@ class Node(models.Model):
         return f"/{self.name}"
 
     def save(self, *args, **kwargs):
-        if self.parent and self.parent.owner_id != self.owner_id:
-            raise ValueError("You cannot move an item into another user's folder.")
+        if not self.workspace_id:
+            if self.parent_id:
+                self.workspace_id = self.parent.workspace_id
+            elif self.owner_id:
+                from workspaces.models import WorkspaceMembership
+
+                self.workspace_id = WorkspaceMembership.objects.filter(
+                    user_id=self.owner_id,
+                    status=WorkspaceMembership.STATUS_ACTIVE,
+                    workspace__kind="personal",
+                ).values_list("workspace_id", flat=True).first()
+        if not self.workspace_id:
+            raise ValueError("Node requires a workspace.")
+        if self.parent and self.parent.workspace_id != self.workspace_id:
+            raise ValueError("You cannot move an item into another workspace's folder.")
         self.path = self.build_path()
         super().save(*args, **kwargs)
 
@@ -256,8 +336,8 @@ class Node(models.Model):
         else:
             target_parent = new_parent if new_parent is not None else self.parent
 
-        if target_parent and target_parent.owner_id != self.owner_id:
-            raise ValueError("You cannot move an item into another user's folder.")
+        if target_parent and target_parent.workspace_id != self.workspace_id:
+            raise ValueError("You cannot move an item into another workspace's folder.")
 
         if target_parent and target_parent.id == self.id:
             raise ValueError("A folder cannot be its own parent.")
@@ -277,7 +357,7 @@ class Node(models.Model):
             with transaction.atomic():
                 if self.node_type == NodeType.FOLDER and old_path != new_path:
                     Node.objects.filter(
-                        owner=self.owner,
+                        workspace=self.workspace,
                         path__startswith=old_path + "/",
                     ).update(
                         path=models.functions.Replace(
@@ -295,7 +375,7 @@ class Node(models.Model):
             self.path = old_path
             raise ValueError(f"Failed to move the item: {e}")
 
-    def to_dict(self):
+    def to_dict(self, *, include_ai_meta=False):
         data = {
             "id": self.id,
             "uid": str(self.uid) if hasattr(self, "uid") else None,
@@ -314,6 +394,7 @@ class Node(models.Model):
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "parent_id": self.parent_id,
+            "parent_uid": str(self.parent.uid) if self.parent_id and self.parent else None,
         }
         if self.is_file and hasattr(self, "blob"):
             data["status"] = self.blob.status
@@ -322,15 +403,20 @@ class Node(models.Model):
             data["mime_type"] = self.blob.mime_type
             data["language"] = self.blob.language
             data["ai_status"] = self.get_ai_status()
+        if self.is_file and include_ai_meta:
+            parse_result = getattr(self, "parse_result", None)
+            data["summary"] = parse_result.summary if parse_result else ""
+            data["auto_tags"] = list(parse_result.auto_tags or []) if parse_result else []
         return data
 
     def __str__(self):
-        return f"{self.name} ({self.owner})"
+        return f"{self.name} ({self.owner or 'deleted user'})"
 
 
 def blob_upload_path(instance, filename):
     ext = os.path.splitext(filename)[1].lower()
-    return f"blobs/user_{instance.node.owner_id}/{instance.uuid}{ext}"
+    workspace_id = instance.node.workspace_id or "orphan"
+    return f"blobs/workspace_{workspace_id}/{instance.uuid}{ext}"
 
 
 class FileBlob(models.Model):
@@ -363,12 +449,6 @@ class FileBlob(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        indexes = [
-            models.Index(fields=["sha256"]),
-            models.Index(fields=["status"]),
-        ]
-
     def size_mb(self):
         if self.size is None:
             return None
@@ -391,9 +471,68 @@ class FileBlob(models.Model):
         return f"{self.original_name}"
 
 
-class UserStorage(models.Model):
-    user = models.OneToOneField(
+class FileOperationLog(models.Model):
+    """One row per file-management API request (upload, rename, move, delete,
+    restore, ...), mirroring document_ai's SearchJob/RAGJob pattern so
+    response time can be queried the same way across operation types (see
+    dev-docs/evaluation/performance-and-reliability.md, 파일 입출력 계측).
+
+    `node` is null for operations that don't resolve to a single surviving
+    node (bulk calls, permanent deletion, empty trash, or requests that
+    failed before a node was found)."""
+
+    owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="file_operation_logs",
+    )
+    node = models.ForeignKey(
+        "files.Node",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="operation_logs",
+    )
+
+    operation = models.CharField(max_length=32, choices=FileOperation.choices, db_index=True)
+    # Operation-specific context that doesn't warrant its own column, e.g.
+    # {"old_name", "new_name"} for rename, {"count"} for bulk operations.
+    detail = models.JSONField(default=dict, blank=True)
+
+    status = models.CharField(
+        max_length=32,
+        choices=AIStatus.choices,
+        default=AIStatus.COMPLETED,
+        db_index=True,
+    )
+    error_message = models.TextField(blank=True)
+    performance_metrics = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner", "-created_at"]),
+            models.Index(fields=["operation", "-created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"FileOperationLog({self.id}) {self.operation}/{self.status}"
+
+
+class UserStorage(models.Model):
+    # Kept only for the legacy admin display during this migration phase.
+    # Quota ownership and all accounting use `workspace` exclusively.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="legacy_storage_records",
+    )
+    workspace = models.OneToOneField(
+        "workspaces.Workspace",
         on_delete=models.CASCADE,
         related_name="storage",
     )
@@ -418,4 +557,4 @@ class UserStorage(models.Model):
         return round(self.total_size / 1024 / 1024 / 1024, 2)
 
     def __str__(self):
-        return f"{self.user.email} - {self.used_size_mb()}MB / {self.total_size_gb()}GB"
+        return f"{self.workspace.name} - {self.used_size_mb()}MB / {self.total_size_gb()}GB"

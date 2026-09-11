@@ -9,6 +9,15 @@
   <p class="section-desc">
     기본적으로 현재 서버가 제공하는 모델을 사용합니다. 별도 Ollama, llama.cpp, vLLM, 외부 API endpoint가 있으면 아래에서 추가해 RAG 답변 대상으로 선택할 수 있습니다.
   </p>
+  {% if workspace.kind == "team" %}
+  <p class="section-desc">
+    {% if is_workspace_admin %}
+    이 설정은 <strong>{{ workspace.name }}</strong> 워크스페이스 전체에 적용되며, 모든 멤버가 공유합니다.
+    {% else %}
+    이 설정은 <strong>{{ workspace.name }}</strong> 워크스페이스 전체에 적용됩니다. 변경은 워크스페이스 관리자만 할 수 있습니다.
+    {% endif %}
+  </p>
+  {% endif %}
 
   <div class="token-list" style="border-top:none;">
     <div class="token-item">
@@ -24,6 +33,7 @@
     </div>
   </div>
 
+  {% if is_workspace_admin %}
   <form method="post" class="create-form" style="margin-top:16px;">
     {% csrf_token %}
     <input type="hidden" name="action" value="set_rag_model">
@@ -35,6 +45,7 @@
     </select>
     <button type="submit" class="btn btn-primary">서버 모델 사용</button>
   </form>
+  {% endif %}
   <p class="section-desc" style="padding-top:0;">
     서버 endpoint: <code>{{ server_rag_base_url }}</code>
   </p>
@@ -47,9 +58,10 @@
     <span class="token-count-badge">{{ llm_endpoints|length }}</span>
   </div>
   <p class="section-desc">
-    이미 실행 중인 OpenAI-compatible endpoint를 추가합니다. 이 설정은 컨테이너나 모델을 실행하지 않고, RAG worker가 해당 URL로 요청을 보내도록 합니다.
+    이미 실행 중인 OpenAI-compatible endpoint를 추가합니다. 이 설정은 컨테이너나 모델을 실행하지 않고, 스트리밍 RAG 요청이 해당 URL을 사용하도록 합니다.
   </p>
 
+  {% if is_workspace_admin %}
   <form method="post" class="create-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="create_llm_endpoint">
@@ -64,6 +76,7 @@
     <button type="submit" class="btn btn-primary">추가</button>
     <input type="password" name="api_key" class="secret-input" placeholder="API key (선택)" autocomplete="off">
   </form>
+  {% endif %}
 
   {% if llm_endpoints %}
   <div class="token-list" style="margin-top:16px;">
@@ -89,6 +102,7 @@
         </div>
         {% endif %}
       </div>
+      {% if is_workspace_admin %}
       <div class="token-actions">
         <form method="post">
           {% csrf_token %}
@@ -116,6 +130,7 @@
           </button>
         </form>
       </div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

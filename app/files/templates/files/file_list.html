@@ -1632,68 +1632,15 @@
       })
     })
     .then(res => {
-      if (!res.ok) {
-        throw new Error(`search enqueue failed: ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`search failed: ${res.status}`);
       return res.json();
     })
     .then(data => {
-      if (data && data.job_id) {
-        pollAISearchJob(data.job_id);
-      } else {
-        aiContainer.innerHTML = '<div style="padding: 20px; color: var(--danger);">결과를 불러올 수 없습니다.</div>';
-      }
+      renderAIResults(data.results || []);
     })
     .catch(err => {
       console.error(err);
       aiContainer.innerHTML = '<div style="padding: 20px; color: var(--danger);">검색 중 오류가 발생했습니다.</div>';
-    });
-  }
-
-  function pollAISearchJob(jobId, attempt = 0) {
-    const aiContainer = document.getElementById('aiResultsContainer');
-    const fileCount = document.getElementById('fileCount');
-    const maxAttempts = 60;
-
-    fetch(`/api/document-ai/v1/search/jobs/${jobId}/`, {
-      method: 'GET',
-      headers: {
-        'X-CSRFToken': getCookie('csrftoken'),
-        'Content-Type': 'application/json'
-      }
-    })
-    .then(res => {
-      if (!res.ok) {
-        throw new Error(`search job fetch failed: ${res.status}`);
-      }
-      return res.json();
-    })
-    .then(job => {
-      if (job.status === 'completed') {
-        renderAIResults(job.results || []);
-        return;
-      }
-
-      if (job.status === 'failed') {
-        const detail = job.error_message ? ` ${escapeHtml(job.error_message)}` : '';
-        fileCount.textContent = 'AI 검색 실패';
-        aiContainer.innerHTML = `<div style="padding: 20px; color: var(--danger);">AI 검색에 실패했습니다.${detail}</div>`;
-        return;
-      }
-
-      if (attempt >= maxAttempts) {
-        fileCount.textContent = 'AI 검색 대기 중';
-        aiContainer.innerHTML = '<div style="padding: 20px; color: var(--muted);">검색 작업이 아직 처리 중입니다. 잠시 후 다시 시도해주세요.</div>';
-        return;
-      }
-
-      fileCount.textContent = job.status === 'processing' ? 'AI 검색 중...' : 'AI 검색 대기 중...';
-      setTimeout(() => pollAISearchJob(jobId, attempt + 1), 1000);
-    })
-    .catch(err => {
-      console.error(err);
-      fileCount.textContent = 'AI 검색 오류';
-      aiContainer.innerHTML = '<div style="padding: 20px; color: var(--danger);">검색 상태를 확인하는 중 오류가 발생했습니다.</div>';
     });
   }
 

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dotori-cli"
+version = "0.3.0"
+description = "Command-line client for a self-hosted Dotori server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+dotori = "dotori_cli.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

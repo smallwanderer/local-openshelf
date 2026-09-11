@@ -1,23 +1,11 @@
 import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from celery import current_app
-
 from files.models import FileBlob
+from document_ai.orchestration import enqueue_parse
+from document_ai.tracing_utils import enqueue_kwargs
 
 logger = logging.getLogger(__name__)
-
-
-class _ParseDocumentTaskProxy:
-    """Queue parse task without importing the heavy Celery task module in web workers."""
-
-    task_name = "document_ai.tasks.parse_document_with_docling"
-
-    def delay(self, node_id):
-        return current_app.send_task(self.task_name, args=[node_id], queue="parse")
-
-
-parse_document_with_docling = _ParseDocumentTaskProxy()
 
 
 @receiver(post_save, sender=FileBlob)
@@ -35,4 +23,5 @@ def trigger_document_parsing(sender, instance, created, **kwargs):
             return
         logger.info(f"New file uploaded (Node ID: {instance.node_id}). Triggering parse_document_with_docling task.")
         # 파싱 태스크 비동기 호출! 파싱이 끝나면 내부적으로 임베딩 큐잉 태스크를 또 부르게 됩니다.
-        parse_document_with_docling.delay(instance.node_id)
+        # 업로드 요청 스레드에서 발생하므로 여기서 얻는 trace_id가 "적재 trace"의 시작점이 됩니다.
+        enqueue_parse(instance.node_id, **enqueue_kwargs())

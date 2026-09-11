@@ -416,7 +416,18 @@ class Command(BaseCommand):
             self.stdout.write(f"priority_preset: {target.priority_preset}")
             if target.serving_profile:
                 self.stdout.write(f"context_length: {target.serving_profile.get('context_length')}")
-                self.stdout.write(f"concurrency: {target.serving_profile.get('concurrency')}")
+                self.stdout.write(
+                    "safe_concurrency_ceiling: "
+                    f"{target.serving_profile.get('safe_concurrency_ceiling')}"
+                )
+                self.stdout.write(
+                    "serving_concurrency: "
+                    f"{target.serving_profile.get('serving_concurrency')}"
+                )
+                self.stdout.write(
+                    "calibration_status: "
+                    f"{target.serving_profile.get('calibration_status')}"
+                )
                 self.stdout.write(
                     f"logical_total_memory_mb: {target.serving_profile.get('logical_total_memory_mb')}"
                 )

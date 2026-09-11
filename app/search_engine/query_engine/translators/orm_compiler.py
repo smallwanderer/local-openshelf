@@ -9,9 +9,9 @@ class ORMCompiler:
         "fileblob": "blob__",
         "parse_result": "parse_result__",
         "chunk": "parse_result__chunks__",
-        "embedding": "parse_result__chunks__embeddings__",
+        "embedding": "parse_result__chunks__embedding__",
         "user": "owner__",
-        "user_storage": "owner__storage__",
+        "user_storage": "workspace__storage__",
     }
 
     def compile(self, context) -> tuple[dict, dict]:

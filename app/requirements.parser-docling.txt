@@ -1,0 +1,6 @@
+# docling parser backend. torchvision(레이아웃/표 인식 모델)까지 포함해서
+# 이 파일 하나만 빠지면 docling 자체가 설치되지 않는다.
+-r requirements.torch.txt
+torchvision==0.28.0
+
+docling==2.113.0

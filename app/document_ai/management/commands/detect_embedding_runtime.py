@@ -1,5 +1,9 @@
 from django.core.management.base import BaseCommand, CommandError
 
+from document_ai.embedding.indexes import replace_active_hnsw_index
+from document_ai.models import EmbeddingGeneration
+from document_ai.services.embedding_runtime_config import load_embedding_runtime
+
 from llm_installation.embedding_catalog import (
     get_embedding_catalog_entry_for_preset,
 )
@@ -21,7 +25,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--scope",
-            choices=("production", "development"),
+            choices=("production",),
             default="production",
         )
         parser.add_argument(
@@ -61,6 +65,23 @@ class Command(BaseCommand):
             entry=entry,
         )
         commit_active_embedding_runtime(options["scope"], generation_id)
+        runtime = load_embedding_runtime(scope=options["scope"])
+        EmbeddingGeneration.objects.update_or_create(
+            generation_id=generation_id,
+            defaults={
+                "scope": runtime.scope,
+                "runtime_fingerprint": runtime.runtime_fingerprint,
+                "catalog_id": runtime.catalog_id,
+                "model_id": runtime.model_id,
+                "model_revision": runtime.model_revision,
+                "provider": runtime.provider,
+                "store": runtime.store,
+                "dimension": runtime.dimension,
+                "supports_sparse": runtime.supports_sparse,
+                "status": "ACTIVE",
+            },
+        )
+        replace_active_hnsw_index(dimension=runtime.dimension)
         self.stdout.write(
             self.style.SUCCESS(
                 f"Activated embedding runtime generation: {generation_id}"

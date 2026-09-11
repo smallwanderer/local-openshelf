@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import APIToken, SyncQuota, User
+from .models import APIToken, CLIToken, SyncQuota, User
 
 
 @admin.register(User)
@@ -31,6 +31,18 @@ class APITokenAdmin(admin.ModelAdmin):
     def key_preview(self, obj):
         return f"{obj.key[:8]}...{obj.key[-4:]}"
     key_preview.short_description = "Key"
+
+
+@admin.register(CLIToken)
+class CLITokenAdmin(admin.ModelAdmin):
+    list_display = ("name", "user", "prefix", "scope_list", "is_active", "created_at", "last_used_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "user__email", "prefix")
+    readonly_fields = ("uid", "key_hash", "prefix", "created_at", "last_used_at")
+
+    def scope_list(self, obj):
+        return ", ".join(obj.scopes or [])
+    scope_list.short_description = "Scopes"
 
 
 @admin.register(SyncQuota)

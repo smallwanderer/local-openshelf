@@ -508,7 +508,7 @@
     loadingArea.style.display = 'block';
     jobStatusArea.style.display = 'none';
     activeJobStartedAt = Date.now();
-    loadingMsg.textContent = '검색 작업을 큐에 넣는 중...';
+    loadingMsg.textContent = '검색 중...';
 
     const payload = {
       query: query,
@@ -539,66 +539,13 @@
       if (!response.ok) {
         throw new Error(data.error || data.detail || `검색 요청 실패 (${response.status})`);
       }
-      if (data.job_id) {
-        updateJobStatus({
-          id: data.job_id,
-          status: data.status,
-          poll_url: data.poll_url,
-        });
-        pollResult(data.poll_url, 0);
-      } else {
-        showMessage('검색 작업 ID를 받지 못했습니다.', 'error');
-        loadingArea.style.display = 'none';
-      }
+      renderResults(data.results || []);
+      loadingArea.style.display = 'none';
     } catch (err) {
       console.error(err);
       showMessage(err.message || '검색 요청 중 오류가 발생했습니다.', 'error');
       loadingArea.style.display = 'none';
     }
-  }
-
-  async function pollResult(url, attempt = 0) {
-    if (attempt > 900) {
-      loadingArea.style.display = 'none';
-      showMessage('검색 작업이 15분 안에 완료되지 않았습니다. celery-search-worker 로그와 최신 SearchJob 상태를 확인하세요.', 'error');
-      return;
-    }
-
-    try {
-      const response = await fetch(url, {headers: {'Accept': 'application/json'}});
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || data.detail || `검색 상태 조회 실패 (${response.status})`);
-      }
-      updateJobStatus(data);
-
-      if (data.status === 'completed') {
-        renderResults(data.results);
-        loadingArea.style.display = 'none';
-      } else if (data.status === 'failed') {
-        showMessage('검색 태스크 실패: ' + (data.error_message || '오류 메시지가 없습니다.'), 'error');
-        loadingArea.style.display = 'none';
-      } else {
-        loadingMsg.textContent = data.status === 'processing'
-          ? '검색 worker에서 임베딩과 검색을 실행 중...'
-          : '검색 worker 대기 중...';
-        setTimeout(() => pollResult(url, attempt + 1), 1000);
-      }
-    } catch (err) {
-      console.error(err);
-      showMessage(err.message || '검색 상태 조회 중 오류가 발생했습니다.', 'error');
-      loadingArea.style.display = 'none';
-    }
-  }
-
-  function updateJobStatus(job) {
-    const elapsedSeconds = activeJobStartedAt
-      ? Math.floor((Date.now() - activeJobStartedAt) / 1000)
-      : 0;
-    const taskId = job.task_id || '-';
-    const jobId = job.id || job.job_id || '-';
-    jobStatusArea.style.display = 'block';
-    jobStatusArea.textContent = `job=${jobId} status=${job.status || '-'} task=${taskId} elapsed=${elapsedSeconds}s`;
   }
 
   function renderResults(results) {

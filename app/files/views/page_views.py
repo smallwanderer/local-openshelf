@@ -13,7 +13,7 @@ def index(request):
 @email_verification_required
 def node_view(request, uid):
     """ 노드(파일/폴더) 상세 뷰 """
-    node = get_object_or_404(Node, uid=uid, owner=request.user)
+    node = get_object_or_404(Node, uid=uid, workspace=request.workspace)
 
     # 브레드크럼 빌드
     breadcrumbs = []
@@ -66,7 +66,7 @@ def rag_workspace(request):
     )
 
     selected_nodes = request.GET.get("nodes", "").strip()
-    preference = get_or_create_llm_preference(request.user)
+    preference = get_or_create_llm_preference(request.workspace, owner=request.user)
     rag_target = get_effective_rag_target(preference)
     return render(request, "files/rag_workspace.html", {
         "selected_nodes": selected_nodes,
@@ -81,7 +81,8 @@ def ai_search_history(request):
     from django.core.paginator import Paginator
 
     history_list = RAGJob.objects.filter(
-        owner=request.user, 
+        workspace=request.workspace,
+        owner=request.user,
         status="completed"
     ).order_by("-completed_at").select_related("search_job")
 
@@ -92,4 +93,3 @@ def ai_search_history(request):
     return render(request, "files/ai_search_history.html", {
         "page_obj": page_obj,
     })
-

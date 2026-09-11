@@ -1,5 +1,7 @@
 Django==5.2.16
 gunicorn==22.0.0
+uvicorn==0.52.1
+uvicorn-worker==0.4.0
 whitenoise==6.12.0
 psycopg[binary]==3.3.4
 
@@ -13,6 +15,7 @@ pgvector==0.5.0
 djangorestframework==3.15.2
 drf-yasg==1.21.15
 requests==2.32.5
+httpx==0.28.1
 pydantic==2.13.4
 urllib3==2.7.0
 charset-normalizer==3.4.9

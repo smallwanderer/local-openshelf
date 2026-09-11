@@ -18,12 +18,12 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
-from django.views.generic import RedirectView
 
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from document_ai.search.views import SandboxPageView
+from files.views.spa import spa_shell
 
 handler400 = "accounts.views.bad_request"
 handler403 = "accounts.views.permission_denied"
@@ -41,13 +41,18 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
-    path("", RedirectView.as_view(url="/files/", permanent=False)),
+    path("", spa_shell, name="spa-shell"),
+    path("workspace/", spa_shell, name="spa-workspace"),
+    path("workspace/<path:client_path>/", spa_shell, name="spa-route"),
     path("admin/", admin.site.urls),
     path("accounts/", include("accounts.urls")),
+    path("api/accounts/v1/", include("accounts.api_v1.urls")),
+    path("api/workspaces/v1/", include("workspaces.api_v1.urls")),
     path("files/", include("files.urls")),
     path("document-ai/sandbox/", SandboxPageView.as_view(), name="document-ai-sandbox"),
     path("api/document-ai/", include("document_ai.urls")),
     path("api/sync/", include("files.sync_api.urls")),
+    path("api/cli/v1/", include("config.cli_urls")),
 
     # Swagger Documentation URLs
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),

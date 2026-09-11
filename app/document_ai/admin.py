@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.text import Truncator
 
-from config.enums import AIStatus, RAGStage
+from config.enums import AIStatus
 from document_ai.models import (
     ChunkEmbedding,
     DocumentChunk,
@@ -14,10 +14,12 @@ from document_ai.models import (
     LLMEndpoint,
     QueryUnderstandingLog,
     RAGJob,
+    ResourceSnapshot,
     SearchJob,
     UserLLMPreference,
 )
-from document_ai.tasks import enqueue_embedding_tasks, generate_rag_response, perform_vector_search
+from document_ai.orchestration import enqueue_embedding
+from document_ai.tracing_utils import enqueue_kwargs
 
 
 def _format_duration(started_at, completed_at):
@@ -179,7 +181,7 @@ class DocumentChunkAdmin(admin.ModelAdmin):
 
     @admin.display(description="Embeddings")
     def embedding_count(self, obj):
-        return obj.embeddings.count()
+        return int(ChunkEmbedding.objects.filter(chunk=obj).exists())
 
     @admin.display(description="Text preview")
     def text_preview(self, obj):
@@ -199,7 +201,7 @@ class DocumentChunkAdmin(admin.ModelAdmin):
         node_ids = set(candidate_qs.values_list("parse_result__node_id", flat=True))
         updated = candidate_qs.update(status=AIStatus.PENDING, error_message={})
         for node_id in node_ids:
-            enqueue_embedding_tasks.delay(node_id)
+            enqueue_embedding(node_id, **enqueue_kwargs())
         self.message_user(
             request,
             f"Queued embedding for {updated} chunks across {len(node_ids)} files.",
@@ -213,8 +215,6 @@ class ChunkEmbeddingAdmin(admin.ModelAdmin):
         "id",
         "node_name",
         "chunk_index",
-        "model_name",
-        "model_version",
         "status",
         "dense_dim",
         "sparse_terms",
@@ -223,16 +223,12 @@ class ChunkEmbeddingAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "status",
-        "model_name",
-        "model_version",
         "embedded_at",
         "created_at",
     )
     search_fields = (
         "chunk__parse_result__node__name",
         "chunk__parse_result__node__owner__email",
-        "model_name",
-        "model_version",
         "error_message",
     )
     readonly_fields = (
@@ -395,7 +391,6 @@ class SearchJobAdmin(admin.ModelAdmin):
         "result_count",
     )
     raw_id_fields = ("owner", "query_log")
-    actions = ("requeue_selected_search_jobs",)
     date_hierarchy = "created_at"
     ordering = ("-created_at",)
     list_select_related = ("owner",)
@@ -427,32 +422,6 @@ class SearchJobAdmin(admin.ModelAdmin):
     @admin.display(description="Performance metrics")
     def performance_metrics_pretty(self, obj):
         return format_html("<pre>{}</pre>", _json_preview(obj.performance_metrics, length=4000))
-
-    @admin.action(description="Requeue selected failed/pending search jobs")
-    def requeue_selected_search_jobs(self, request, queryset):
-        candidate_qs = queryset.filter(status__in=[AIStatus.PENDING, AIStatus.FAILED])
-        queued = 0
-        for job in candidate_qs:
-            async_result = perform_vector_search.apply_async(args=[job.id], queue="search")
-            job.task_id = async_result.id
-            job.status = AIStatus.PENDING
-            job.error_message = ""
-            job.performance_metrics = {}
-            job.started_at = None
-            job.completed_at = None
-            job.save(
-                update_fields=[
-                    "task_id",
-                    "status",
-                    "error_message",
-                    "started_at",
-                    "completed_at",
-                    "performance_metrics",
-                ]
-            )
-            queued += 1
-        self.message_user(request, f"Requeued {queued} search jobs.", messages.SUCCESS)
-
 
 @admin.register(RAGJob)
 class RAGJobAdmin(admin.ModelAdmin):
@@ -519,7 +488,6 @@ class RAGJobAdmin(admin.ModelAdmin):
         "citation_count",
     )
     raw_id_fields = ("owner", "search_job", "query_log", "llm_endpoint")
-    actions = ("requeue_selected_rag_jobs",)
     date_hierarchy = "created_at"
     ordering = ("-created_at",)
     list_select_related = ("owner", "search_job", "llm_endpoint")
@@ -548,46 +516,12 @@ class RAGJobAdmin(admin.ModelAdmin):
     def performance_metrics_pretty(self, obj):
         return format_html("<pre>{}</pre>", _json_preview(obj.performance_metrics, length=4000))
 
-    @admin.action(description="Requeue selected completed-search RAG jobs")
-    def requeue_selected_rag_jobs(self, request, queryset):
-        queued = 0
-        for job in queryset.select_related("search_job"):
-            if not job.search_job_id or job.search_job.status != AIStatus.COMPLETED:
-                continue
-            async_result = generate_rag_response.apply_async(args=[job.id], queue="rag")
-            job.task_id = async_result.id
-            job.status = AIStatus.PENDING
-            job.stage = RAGStage.GENERATING
-            job.stage_message = "검색된 근거를 바탕으로 답변을 생성하고 있습니다."
-            job.error_message = ""
-            job.answer = ""
-            job.citations = []
-            job.started_at = None
-            job.completed_at = None
-            job.performance_metrics = {}
-            job.save(
-                update_fields=[
-                    "task_id",
-                    "status",
-                    "stage",
-                    "stage_message",
-                    "error_message",
-                    "answer",
-                    "citations",
-                    "started_at",
-                    "completed_at",
-                    "performance_metrics",
-                ]
-            )
-            queued += 1
-        self.message_user(request, f"Requeued {queued} RAG jobs.", messages.SUCCESS)
-
-
 @admin.register(LLMEndpoint)
 class LLMEndpointAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "name",
+        "workspace",
         "owner",
         "endpoint_type",
         "base_url",
@@ -596,18 +530,35 @@ class LLMEndpointAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("endpoint_type", "is_active", "created_at", "updated_at")
-    search_fields = ("name", "base_url", "default_model", "owner__email")
-    raw_id_fields = ("owner",)
+    search_fields = ("name", "base_url", "default_model", "workspace__name", "owner__email")
+    raw_id_fields = ("workspace", "owner")
     readonly_fields = ("created_at", "updated_at", "last_checked_at", "last_check_status", "last_check_message")
-    ordering = ("owner__email", "name")
+    ordering = ("workspace__name", "name")
 
 
 @admin.register(UserLLMPreference)
 class UserLLMPreferenceAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "rag_endpoint", "rag_model", "updated_at")
-    search_fields = ("user__email", "rag_model", "rag_endpoint__name")
-    raw_id_fields = ("user", "rag_endpoint")
+    list_display = ("id", "workspace", "user", "rag_endpoint", "rag_model", "updated_at")
+    search_fields = ("workspace__name", "user__email", "rag_model", "rag_endpoint__name")
+    raw_id_fields = ("workspace", "user", "rag_endpoint")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ResourceSnapshot)
+class ResourceSnapshotAdmin(admin.ModelAdmin):
+    list_display = (
+        "service",
+        "cpu_percent",
+        "mem_mb",
+        "gpu_mem_mb",
+        "db_connections",
+        "disk_free_mb",
+        "collected_at",
+    )
+    list_filter = ("service",)
+    date_hierarchy = "collected_at"
+    ordering = ("-collected_at",)
+    readonly_fields = ("collected_at",)
 
 
 try:

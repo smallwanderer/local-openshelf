@@ -1,4 +1,5 @@
 import secrets
+import uuid
 
 from django.db import models
 from django.conf import settings
@@ -68,7 +69,7 @@ def _generate_token_key():
 
 
 class APIToken(models.Model):
-    """Bearer token for CLI / programmatic access."""
+    """Legacy Bearer token used by the local-folder sync connector."""
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -76,15 +77,46 @@ class APIToken(models.Model):
         related_name="api_tokens",
     )
     key = models.CharField(
-        max_length=64, unique=True, db_index=True, default=_generate_token_key
+        max_length=64, unique=True, default=_generate_token_key
     )
     name = models.CharField(max_length=128, help_text="Token purpose description")
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
-    class Meta:
-        indexes = [models.Index(fields=["key"])]
+    def __str__(self):
+        return f"{self.name} ({self.user.email})"
+
+
+def default_cli_token_scopes():
+    return [
+        "documents:read",
+        "documents:write",
+        "search",
+        "rag",
+        "status:read",
+    ]
+
+
+class CLIToken(models.Model):
+    """Hashed Bearer credential for the user-facing Dotori CLI."""
+
+    uid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="cli_tokens",
+    )
+    key_hash = models.CharField(max_length=64, unique=True)
+    prefix = models.CharField(max_length=20)
+    name = models.CharField(max_length=128, help_text="Token purpose description")
+    scopes = models.JSONField(default=default_cli_token_scopes)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    def has_scope(self, scope):
+        return scope in (self.scopes or [])
 
     def __str__(self):
         return f"{self.name} ({self.user.email})"
@@ -109,4 +141,4 @@ class SyncQuota(models.Model):
     def __str__(self):
         used_mb = round(self.used_size / 1024 / 1024, 2)
         total_gb = round(self.total_size / 1024 / 1024 / 1024, 2)
-        return f"SyncQuota({self.user.email}) {used_mb}MB / {total_gb}GB"
+        return f"SyncQuota({self.user.email}) {used_mb}MB / {total_gb}GB"

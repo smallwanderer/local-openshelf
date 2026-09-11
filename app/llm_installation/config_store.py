@@ -7,16 +7,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from document_ai.services.rag_runtime_config import get_llm_runtime_config_path
+from document_ai.services.rag_runtime_config import (
+    get_llm_runtime_config_path,
+    normalize_serving_profile,
+)
 from llm_installation.runtime_probe import ServerRuntimeProfile
 
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 RUNTIME_BASE_URL = "http://rag-runtime:8080"
 LEGACY_ARGS_FILE = {
     "llama.cpp": "llama_rag.args",
     "vllm": "vllm_rag.args",
 }
+
+CALIBRATION_STATUSES = {"running", "calibrated"}
 
 
 def _write_runtime_args(path: Path, args_text: str) -> None:
@@ -48,7 +53,7 @@ def _build_llama_runtime_args(*, target, profile) -> list[str] | None:
     if entry is None or entry.get("id") != target.model:
         return None
 
-    plan = target.serving_profile
+    plan = normalize_serving_profile(target.serving_profile)
     hf = entry.get("hf") or {}
     artifact = entry.get("artifact") or {}
     hf_repo = str(hf.get("repo_id") or "")
@@ -102,7 +107,7 @@ def _build_vllm_runtime_args(*, target) -> list[str] | None:
     if entry is None or entry.get("id") != target.model:
         return None
 
-    plan = target.serving_profile
+    plan = normalize_serving_profile(target.serving_profile)
     hf = entry.get("hf") or {}
     artifact = entry.get("artifact") or {}
     args = [
@@ -147,7 +152,9 @@ def _build_runtime_payload(
             "selection_mode": target.selection_mode,
             "selection_reason_code": target.selection_reason_code,
             "runtime_policy_input": target.runtime_policy_input,
-            "serving_profile": target.serving_profile or {},
+            "serving_profile": normalize_serving_profile(
+                target.serving_profile
+            ),
             "endpoint_status": asdict(target.endpoint_status)
             if target.endpoint_status
             else None,
@@ -210,6 +217,139 @@ def commit_active_runtime_config(
     tmp_path.write_text(payload_text, encoding="utf-8")
     tmp_path.replace(active_path)
     return active_path
+
+
+def _replace_runtime_arg(args: list[str], flag: str, value: int) -> None:
+    try:
+        flag_index = args.index(flag)
+    except ValueError as exc:
+        raise ValueError(f"Active runtime args do not contain {flag}") from exc
+    value_index = flag_index + 1
+    if value_index >= len(args):
+        raise ValueError(f"Active runtime arg {flag} has no value")
+    args[value_index] = str(value)
+
+
+def stage_calibration_runtime_generation(
+    *,
+    scope: str,
+    serving_concurrency: int,
+    calibration_run_id: str,
+    calibration_status: str,
+    repo_root: Path | None = None,
+) -> tuple[str, Path]:
+    """Clone the active local runtime into a concurrency-specific generation.
+
+    Calibration changes only the runtime scheduler/admission capacity. Model,
+    quantization, context per request, and every other installation decision
+    remain identical to the active generation.
+    """
+    if calibration_status not in CALIBRATION_STATUSES:
+        raise ValueError(f"Unsupported calibration status: {calibration_status}")
+    if isinstance(serving_concurrency, bool) or serving_concurrency < 1:
+        raise ValueError("serving_concurrency must be a positive integer")
+
+    active_path = get_llm_runtime_config_path(scope, repo_root=repo_root)
+    try:
+        payload = json.loads(active_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"Active runtime config does not exist: {active_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Active runtime config is invalid JSON: {active_path}") from exc
+
+    target = payload.get("target") if isinstance(payload, dict) else None
+    if not isinstance(target, dict):
+        raise ValueError("Active runtime config has no target")
+    runtime = str(target.get("runtime") or "")
+    if runtime not in LEGACY_ARGS_FILE:
+        raise ValueError("Concurrency calibration requires a managed local runtime")
+    source_generation_id = str(target.get("generation_id") or "")
+    if not source_generation_id:
+        raise ValueError("Active runtime is not a managed generation")
+
+    serving_profile = normalize_serving_profile(target.get("serving_profile"))
+    safe_ceiling = int(serving_profile.get("safe_concurrency_ceiling") or 1)
+    if serving_concurrency > safe_ceiling:
+        raise ValueError(
+            f"serving_concurrency={serving_concurrency} exceeds "
+            f"safe_concurrency_ceiling={safe_ceiling}"
+        )
+    context_length = int(serving_profile.get("context_length") or 0)
+    if context_length < 1:
+        raise ValueError("Active serving profile has no valid context_length")
+
+    source_args_path = (
+        active_path.parent
+        / "generations"
+        / source_generation_id
+        / "runtime.args"
+    )
+    try:
+        args = source_args_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"Active runtime args do not exist: {source_args_path}") from exc
+    if not args:
+        raise ValueError(f"Active runtime args are empty: {source_args_path}")
+
+    if runtime == "llama.cpp":
+        _replace_runtime_arg(args, "--parallel", serving_concurrency)
+        _replace_runtime_arg(args, "--ctx-size", context_length * serving_concurrency)
+    else:
+        _replace_runtime_arg(args, "--max-num-seqs", serving_concurrency)
+        _replace_runtime_arg(
+            args,
+            "--max-num-batched-tokens",
+            context_length * serving_concurrency,
+        )
+
+    now = datetime.now(timezone.utc)
+    safe_run_id = "".join(
+        character for character in calibration_run_id if character.isalnum() or character in "-_"
+    )[:48]
+    if not safe_run_id:
+        raise ValueError("calibration_run_id must contain a letter or number")
+    status_suffix = "selected" if calibration_status == "calibrated" else "candidate"
+    generation_id = (
+        f"cal-{now.strftime('%Y%m%d%H%M%S%f')}-{safe_run_id}-{status_suffix}"
+        f"-c{serving_concurrency}"
+    )
+
+    calibrated_profile = dict(serving_profile)
+    original_generation_id = str(
+        serving_profile.get("calibration_original_generation_id")
+        or source_generation_id
+    )
+    calibrated_profile.update(
+        {
+            "serving_concurrency": serving_concurrency,
+            "concurrency": serving_concurrency,
+            "parallel": serving_concurrency,
+            "max_num_seqs": serving_concurrency,
+            "server_ctx_size": context_length * serving_concurrency,
+            "max_num_batched_tokens": context_length * serving_concurrency,
+            "calibration_status": calibration_status,
+            "calibration_run_id": calibration_run_id,
+            "calibration_source_generation_id": source_generation_id,
+            "calibration_original_generation_id": original_generation_id,
+            "calibration_updated_at": now.isoformat(),
+        }
+    )
+
+    staged_payload = json.loads(json.dumps(payload))
+    staged_payload["version"] = CONFIG_VERSION
+    staged_payload["generated_at"] = now.isoformat()
+    staged_target = staged_payload["target"]
+    staged_target["generation_id"] = generation_id
+    staged_target["serving_profile"] = calibrated_profile
+
+    generation_dir = active_path.parent / "generations" / generation_id
+    generation_dir.mkdir(parents=True, exist_ok=False)
+    (generation_dir / "runtime.json").write_text(
+        json.dumps(staged_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _write_runtime_args(generation_dir / "runtime.args", "\n".join(args) + "\n")
+    return generation_id, generation_dir
 
 
 def stage_legacy_runtime_generation(

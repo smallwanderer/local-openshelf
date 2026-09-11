@@ -9,13 +9,11 @@ import time as time_module
 from django.utils import timezone
 
 from config.enums import AIStatus, QueryIntent, RAGStage
+from config.tracing import get_trace_id
+from document_ai.db_span import capture_db_spans
 from document_ai.performance import datetime_delta_ms, elapsed_ms, put_metric
 
 logger = logging.getLogger(__name__)
-
-
-class RAGGenerationBusy(Exception):
-    pass
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -78,7 +76,19 @@ def _get_chat_completions_stream_delta_content(payload: dict) -> str:
     return str(content or "")
 
 
-def _iter_openai_responses_stream_content(response):
+def _get_stream_usage(payload: dict) -> dict | None:
+    # Chat Completions final chunk (stream_options.include_usage=True): top-level "usage".
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        return usage
+    # Responses API "response.completed" event: usage nested under "response".
+    usage = (payload.get("response") or {}).get("usage")
+    if isinstance(usage, dict):
+        return usage
+    return None
+
+
+def _iter_openai_responses_stream_content(response, usage_holder: dict | None = None):
     for raw_line in response.iter_lines(decode_unicode=False):
         if not raw_line:
             continue
@@ -95,6 +105,10 @@ def _iter_openai_responses_stream_content(response):
         except json.JSONDecodeError:
             logger.debug("Skipping non-JSON RAG stream line: %r", line[:200])
             continue
+        if usage_holder is not None:
+            usage = _get_stream_usage(payload)
+            if usage:
+                usage_holder.update(usage)
         content = _get_responses_stream_delta_content(payload)
         if not content:
             content = _get_chat_completions_stream_delta_content(payload)
@@ -137,6 +151,38 @@ def _extract_llm_final_content(text: str, *, fallback_to_raw: bool = True) -> st
     return _strip_llm_control_tokens(raw)
 
 
+def _render_citation_block(citation: dict) -> str:
+    return "\n".join(
+        [
+            f"[{citation['id']}] {citation['node_name']}",
+            f"section: {citation['section'] or 'N/A'}",
+            f"pages: {citation['pages'] or 'N/A'}",
+            f"text: {citation['text']}",
+        ]
+    )
+
+
+def _merge_citation_field(existing_value: str, new_value) -> str:
+    new_value = str(new_value or "").strip()
+    if not new_value:
+        return existing_value
+    parts = [part.strip() for part in existing_value.split(",")] if existing_value else []
+    if new_value in parts:
+        return existing_value
+    parts.append(new_value)
+    return ", ".join(part for part in parts if part)
+
+
+def _better_citation_score(existing, candidate):
+    existing_score = _coerce_score(existing)
+    candidate_score = _coerce_score(candidate)
+    if candidate_score is None:
+        return existing
+    if existing_score is None or candidate_score > existing_score:
+        return candidate
+    return existing
+
+
 def _build_rag_context(
     results: list,
     *,
@@ -144,18 +190,23 @@ def _build_rag_context(
     context_max_chars: int = 3000,
     evidence_text_max_chars: int = 500,
 ) -> tuple[str, list[dict]]:
-    context_blocks = []
-    citations = []
-    citation_id = 1
+    # Evidences from the same document are merged into one citation instead of
+    # getting a separate [N] per chunk - otherwise the same source shows up as
+    # [1][2][3] in the answer even though it is a single document.
+    citations: list[dict] = []
+    citation_by_node: dict[str, dict] = {}
+    evidence_count = 0
     used_chars = 0
 
     for result in results or []:
         node_name = result.get("node_name", "")
         node_id = result.get("node_id")
         doc_score = result.get("doc_score")
+        node_key = str(node_id) if node_id is not None else f"name:{node_name}"
+
         for evidence in result.get("evidences", []) or []:
-            if citation_id > evidence_limit:
-                return "\n\n".join(context_blocks), citations
+            if evidence_count >= evidence_limit:
+                return "\n\n".join(_render_citation_block(c) for c in citations), citations
 
             text = evidence.get("compressed_text") or evidence.get("context_text") or evidence.get("text") or ""
             text = str(text).strip()
@@ -163,40 +214,57 @@ def _build_rag_context(
                 continue
             remaining_chars = context_max_chars - used_chars
             if remaining_chars <= 0:
-                return "\n\n".join(context_blocks), citations
+                return "\n\n".join(_render_citation_block(c) for c in citations), citations
 
             text_limit = max(100, min(evidence_text_max_chars, remaining_chars))
             clipped_text = text[:text_limit]
+
+            existing = citation_by_node.get(node_key)
+            if existing is not None:
+                before_len = len(_render_citation_block(existing))
+                merged_text = f"{existing['text']}\n{clipped_text}"
+                merged_section = _merge_citation_field(existing["section"], evidence.get("section"))
+                merged_pages = _merge_citation_field(existing["pages"], evidence.get("pages"))
+                after_len = before_len + len(merged_text) - len(existing["text"]) + len(merged_section) - len(
+                    existing["section"]
+                ) + len(merged_pages) - len(existing["pages"])
+                if used_chars + (after_len - before_len) > context_max_chars:
+                    return "\n\n".join(_render_citation_block(c) for c in citations), citations
+
+                existing["text"] = merged_text
+                existing["section"] = merged_section
+                existing["pages"] = merged_pages
+                existing["chunk_ids"].append(evidence.get("chunk_id"))
+                existing["hybrid_score"] = _better_citation_score(existing.get("hybrid_score"), evidence.get("hybrid_score"))
+                existing["dense_score"] = _better_citation_score(existing.get("dense_score"), evidence.get("dense_score"))
+                existing["sparse_score"] = _better_citation_score(existing.get("sparse_score"), evidence.get("sparse_score"))
+                used_chars += after_len - before_len
+                evidence_count += 1
+                continue
+
             citation = {
-                "id": citation_id,
+                "id": len(citations) + 1,
                 "node_id": str(node_id) if node_id is not None else "",
                 "node_name": node_name,
-                "chunk_id": evidence.get("chunk_id"),
-                "section": evidence.get("section") or "",
-                "pages": evidence.get("pages") or "",
+                "chunk_ids": [evidence.get("chunk_id")],
+                "section": str(evidence.get("section") or ""),
+                "pages": str(evidence.get("pages") or ""),
                 "doc_score": doc_score,
                 "hybrid_score": evidence.get("hybrid_score"),
                 "dense_score": evidence.get("dense_score"),
                 "sparse_score": evidence.get("sparse_score"),
                 "text": clipped_text,
             }
-            block = "\n".join(
-                [
-                    f"[{citation_id}] {node_name}",
-                    f"section: {citation['section'] or 'N/A'}",
-                    f"pages: {citation['pages'] or 'N/A'}",
-                    f"text: {citation['text']}",
-                ]
-            )
+            block = _render_citation_block(citation)
             if used_chars + len(block) > context_max_chars and citations:
-                return "\n\n".join(context_blocks), citations
+                return "\n\n".join(_render_citation_block(c) for c in citations), citations
 
             citations.append(citation)
-            context_blocks.append(block)
+            citation_by_node[node_key] = citation
             used_chars += len(block) + 2
-            citation_id += 1
+            evidence_count += 1
 
-    return "\n\n".join(context_blocks), citations
+    return "\n\n".join(_render_citation_block(c) for c in citations), citations
 
 
 def _coerce_score(value) -> float | None:
@@ -269,6 +337,8 @@ def _build_responses_payload(
     fewshot_assistant: str,
     user_prompt: str,
     max_tokens: int,
+    temperature: float,
+    top_p: float,
 ) -> dict:
     payload = {
         "model": llm_config.model,
@@ -278,8 +348,8 @@ def _build_responses_payload(
             {"role": "assistant", "content": fewshot_assistant},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": float(os.getenv("RAG_TEMPERATURE", "0.2")),
-        "top_p": float(os.getenv("RAG_TOP_P", "0.9")),
+        "temperature": temperature,
+        "top_p": top_p,
         "stream": True,
     }
     token_limit_key = "max_output_tokens" if _uses_openai_responses_api(llm_config.base_url) else "max_tokens"
@@ -295,6 +365,8 @@ def _build_chat_completions_payload(
     fewshot_assistant: str,
     user_prompt: str,
     max_tokens: int,
+    temperature: float,
+    top_p: float,
 ) -> dict:
     return {
         "model": llm_config.model,
@@ -304,14 +376,18 @@ def _build_chat_completions_payload(
             {"role": "assistant", "content": fewshot_assistant},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": float(os.getenv("RAG_TEMPERATURE", "0.2")),
-        "top_p": float(os.getenv("RAG_TOP_P", "0.9")),
+        "temperature": temperature,
+        "top_p": top_p,
         "max_tokens": max_tokens,
         "stream": True,
+        # OpenAI-compatible streaming servers (llama.cpp, vLLM) omit token usage
+        # from stream chunks unless explicitly requested. Needed to compute the
+        # actual generation throughput (tokens/sec) for concurrency tuning.
+        "stream_options": {"include_usage": True},
     }
 
 
-def _build_llm_request(*, llm_config, system_prompt, fewshot_user, fewshot_assistant, user_prompt, max_tokens):
+def _build_llm_request(*, llm_config, system_prompt, fewshot_user, fewshot_assistant, user_prompt, max_tokens, temperature, top_p):
     if _uses_openai_responses_api(llm_config.base_url):
         return (
             llm_config.responses_url,
@@ -322,6 +398,8 @@ def _build_llm_request(*, llm_config, system_prompt, fewshot_user, fewshot_assis
                 fewshot_assistant=fewshot_assistant,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
             ),
         )
 
@@ -334,6 +412,8 @@ def _build_llm_request(*, llm_config, system_prompt, fewshot_user, fewshot_assis
             fewshot_assistant=fewshot_assistant,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
         ),
     )
 
@@ -423,32 +503,17 @@ def _mark_rag_canceled(rag_job, redis_client, performance_metrics=None) -> dict:
 
 
 def _build_generation_prompts(rag_job, *, skip_retrieval: bool, context_text: str) -> tuple[str, str, str, str]:
-    language_instruction = "Answer in Korean" if rag_job.language == "ko" else "Answer in English."
+    from document_ai.rag.prompt_profiles import build_system_prompt
+
+    prompt_route = "no_retrieval" if skip_retrieval else "document_rag"
+    system_prompt = build_system_prompt(
+        route=prompt_route,
+        language=rag_job.language,
+        workspace=rag_job.workspace,
+    )
     if skip_retrieval:
-        system_prompt = (
-            "You are a helpful AI assistant for this document workspace. "
-            "The query classifier determined that document retrieval is not required. "
-            "Answer naturally without citations. If the user asks about app usage, explain briefly and practically. "
-            "If the user asks casual conversation, respond politely and concisely. "
-            "Do not claim that you searched documents. "
-            "Absolutely do not output reasoning processes, thoughts, or XML-like thinking tags. "
-            "Output only the final clean answer text.\n"
-            f"{language_instruction}"
-        )
         user_prompt = f"Question:\n{rag_job.question}\n\nAnswer without document citations."
     else:
-        system_prompt = (
-            "You are a helpful AI assistant. "
-            "For general greetings, casual conversation, or helper requests (e.g., 'Hi', 'Hello', '안녕', '반가워', '너는 누구야'), "
-            "respond friendly, politely, and naturally. You do not need to look at or cite the evidence for these casual interactions.\n"
-            "For informational questions requiring document knowledge, use the provided evidence to answer. "
-            "Only answer what is supported by the evidence and append citation numbers like [1], [2] at the end of each cited sentence.\n"
-            "If the informational question cannot be answered using the provided evidence, state clearly and politely that "
-            "the answer cannot be found in the provided documents, and do not make up an answer.\n"
-            "Absolutely do not output reasoning processes, thoughts, or XML-like thinking tags. "
-            "Output only the final clean answer text.\n"
-            f"{language_instruction}"
-        )
         user_prompt = (
             f"Question:\n{rag_job.question}\n\n"
             f"Evidence:\n{context_text}\n\n"
@@ -483,10 +548,19 @@ def _build_generation_prompts(rag_job, *, skip_retrieval: bool, context_text: st
     return system_prompt, user_prompt, fewshot_user, fewshot_assistant
 
 
-def generate_rag_response_sync(rag_job_id: int) -> dict:
+# DEPRECATED - superseded by the ASGI path (document_ai.rag.async_generation.
+# iter_rag_generation_events_async, driven from streaming.create_rag_streaming_response_async).
+# RAGStreamView no longer calls this. Kept only because app/tests/test_rag_flow.py and
+# test_performance_instrumentation.py still exercise prompt-building/cancellation/endpoint
+# selection through it; do not wire this back into a live request path.
+def generate_rag_response_sync(rag_job_id: int, *, on_token=None) -> dict:
+    with capture_db_spans():
+        return _generate_rag_response_sync(rag_job_id, on_token=on_token)
+
+
+def _generate_rag_response_sync(rag_job_id: int, *, on_token=None) -> dict:
     import requests
     from redis import Redis
-    from redis_semaphore import NotAvailable, Semaphore
 
     from document_ai.models import RAGJob
     from document_ai.services.llm_endpoint_service import resolve_rag_llm_request_config
@@ -502,6 +576,7 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
         return {"status": "failed", "job_id": rag_job_id, "error": f"RAG job {rag_job_id} not found"}
 
     metrics = dict(rag_job.performance_metrics or {})
+    put_metric(metrics, "trace_id", get_trace_id())
 
     def finish_metrics(**extra):
         for name, value in extra.items():
@@ -542,20 +617,16 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
     rag_job.performance_metrics = metrics
     rag_job.save(update_fields=["status", "stage", "stage_message", "started_at", "error_message", "performance_metrics"])
 
+    from document_ai.search.profiles import get_effective_generation_config
+
     llm_config = resolve_rag_llm_request_config(rag_job)
+    generation_config = get_effective_generation_config(rag_job.workspace)
     redis_url = os.getenv("RAG_REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"))
-    semaphore_count = _get_positive_int_env("RAG_SEMAPHORE_COUNT", 1)
-    semaphore_timeout = _get_positive_int_env("RAG_SEMAPHORE_TIMEOUT", 60)
     request_timeout = _get_positive_int_env("RAG_REQUEST_TIMEOUT", 300)
-    max_tokens = _get_positive_int_env("RAG_MAX_TOKENS", 512)
+    max_tokens = generation_config["max_output_tokens"]
     evidence_limit = _get_positive_int_env("RAG_EVIDENCE_LIMIT", 5)
     context_max_chars = _get_positive_int_env("RAG_CONTEXT_MAX_CHARS", 3000)
     evidence_text_max_chars = _get_positive_int_env("RAG_EVIDENCE_TEXT_MAX_CHARS", 500)
-    stale_lock_timeout = max(request_timeout + 60, 300)
-    semaphore_namespace = os.getenv(
-        "RAG_SEMAPHORE_NAMESPACE",
-        "llama_rag_v1",
-    )
 
     context_started = time_module.perf_counter()
     if skip_retrieval:
@@ -589,29 +660,6 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
     )
 
     redis_client = Redis.from_url(redis_url)
-    semaphore = Semaphore(
-        redis_client,
-        count=semaphore_count,
-        namespace=semaphore_namespace,
-        stale_client_timeout=stale_lock_timeout,
-    )
-
-    acquired = False
-    semaphore_started = time_module.perf_counter()
-    try:
-        semaphore.acquire(timeout=semaphore_timeout)
-        acquired = True
-        put_metric(metrics, "semaphore_wait_ms", elapsed_ms(semaphore_started))
-    except NotAvailable as exc:
-        put_metric(metrics, "semaphore_wait_ms", elapsed_ms(semaphore_started))
-        rag_job.status = AIStatus.PENDING
-        rag_job.stage = RAGStage.QUEUED
-        rag_job.stage_message = "RAG worker가 바빠서 잠시 후 다시 시도합니다."
-        rag_job.task_id = ""
-        rag_job.error_message = "RAG worker is busy. Please retry shortly."
-        rag_job.performance_metrics = finish_metrics(semaphore_busy=True)
-        rag_job.save(update_fields=["status", "stage", "stage_message", "task_id", "error_message", "performance_metrics"])
-        raise RAGGenerationBusy("RAG worker is busy. Please retry shortly.") from exc
 
     try:
         if rag_job.status == AIStatus.CANCELED or is_rag_cancel_requested(rag_job.id, redis_client=redis_client):
@@ -624,6 +672,8 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
             fewshot_assistant=fewshot_assistant,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
+            temperature=generation_config["temperature"],
+            top_p=generation_config["top_p"],
         )
         llm_started = time_module.perf_counter()
         response = requests.post(
@@ -642,13 +692,25 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
                 f"RAG LLM HTTP {response.status_code}: {response_text}"
             ) from exc
         raw_parts = []
+        emitted_answer = ""
         last_cancel_check = 0.0
         first_token_at = None
-        for content in _iter_openai_responses_stream_content(response):
+        usage_holder: dict = {}
+        for content in _iter_openai_responses_stream_content(response, usage_holder):
             if first_token_at is None:
                 first_token_at = time_module.perf_counter()
                 put_metric(metrics, "llm_ttft_ms", elapsed_ms(llm_started, first_token_at))
             raw_parts.append(content)
+            if on_token is not None:
+                # Normalize the accumulated output before publishing a delta.
+                # Reasoning-tagged output stays empty until its final marker,
+                # so internal reasoning is never sent to the client.
+                candidate = _extract_llm_final_content("".join(raw_parts), fallback_to_raw=True)
+                if candidate.startswith(emitted_answer):
+                    safe_delta = candidate[len(emitted_answer):]
+                    if safe_delta:
+                        on_token(safe_delta)
+                        emitted_answer = candidate
             now_monotonic = time_module.monotonic()
             if now_monotonic - last_cancel_check < 0.5:
                 continue
@@ -659,8 +721,25 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
 
         raw_answer = "".join(raw_parts).strip()
         put_metric(metrics, "llm_total_ms", elapsed_ms(llm_started))
+        generation_after_first_token_ms = None
         if first_token_at is not None:
-            put_metric(metrics, "llm_generation_after_first_token_ms", elapsed_ms(first_token_at))
+            generation_after_first_token_ms = elapsed_ms(first_token_at)
+            put_metric(metrics, "llm_generation_after_first_token_ms", generation_after_first_token_ms)
+
+        # usage counts come from the serving LLM itself (stream_options.include_usage),
+        # not a local tokenizer, so the resulting tokens/sec reflects the actual
+        # decode speed of the runtime currently in use.
+        output_token_count = usage_holder.get("completion_tokens") or usage_holder.get("output_tokens")
+        input_token_count = usage_holder.get("prompt_tokens") or usage_holder.get("input_tokens")
+        put_metric(metrics, "output_token_count", output_token_count)
+        put_metric(metrics, "input_token_count", input_token_count)
+        if output_token_count and generation_after_first_token_ms:
+            put_metric(
+                metrics,
+                "output_tokens_per_second",
+                round((output_token_count - 1) / (generation_after_first_token_ms / 1000), 3),
+            )
+
         if is_rag_cancel_requested(rag_job.id, redis_client=redis_client):
             return _mark_rag_canceled(rag_job, redis_client, finish_metrics(canceled=True))
 
@@ -683,6 +762,11 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
             rag_job.error_message = f"LLM returned no final answer after normalization. raw_preview={raw_answer[:1000]}"
         else:
             rag_job.error_message = ""
+
+        if on_token is not None and answer.startswith(emitted_answer):
+            final_delta = answer[len(emitted_answer):]
+            if final_delta:
+                on_token(final_delta)
 
         rag_job.answer = answer
         rag_job.citations = citations
@@ -715,6 +799,3 @@ def generate_rag_response_sync(rag_job_id: int) -> dict:
         rag_job.save(update_fields=["status", "stage", "stage_message", "completed_at", "error_message", "performance_metrics"])
         logger.exception("RAG LLM error: job_id=%s", rag_job_id)
         return {"status": "failed", "job_id": rag_job_id, "error": str(exc)}
-    finally:
-        if acquired:
-            semaphore.release()

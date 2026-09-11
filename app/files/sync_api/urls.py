@@ -7,6 +7,7 @@ from . import views
 app_name = "sync_api"
 
 urlpatterns = [
+    path("v1/identity/", views.identity, name="identity"),
     path("v1/ping/", views.ping, name="ping"),
     path("v1/diff/", views.diff, name="diff"),
     path("v1/upload/", views.upload, name="upload"),

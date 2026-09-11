@@ -78,9 +78,11 @@ class EmbeddingContextualCompressor:
         self.sparse_weight = float(sparse_weight if sparse_weight is not None else getattr(settings, "CONTEXTUAL_COMPRESSION_SPARSE_WEIGHT", 0.6))
         self.model_name = get_embedding_model()
         self.embedding_backend = get_embedding_backend()
-        self.embedding_generation_id = (
-            get_active_embedding_runtime().generation_id
-        )
+        runtime = get_active_embedding_runtime()
+        # Segment vectors are scored in Python and currently use a fixed
+        # 1024-dimensional storage field. Fail closed for other dimensions
+        # instead of writing an incompatible vector.
+        self.enabled = self.enabled and runtime.dimension == 1024
 
     def compress_evidences(
         self,
@@ -237,7 +239,6 @@ class EmbeddingContextualCompressor:
             item.segment_index: item
             for item in ChunkSegmentEmbedding.objects.filter(
                 chunk=chunk,
-                generation_id=self.embedding_generation_id,
                 window_size=self.window_size,
                 segment_index__in=[spec.segment_index for spec in specs],
             )
@@ -350,7 +351,6 @@ class EmbeddingContextualCompressor:
                 )
                 obj, _ = ChunkSegmentEmbedding.objects.update_or_create(
                     chunk=chunk,
-                    generation_id=self.embedding_generation_id,
                     window_size=self.window_size,
                     segment_index=spec.segment_index,
                     defaults={

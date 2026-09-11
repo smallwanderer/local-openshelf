@@ -14,6 +14,7 @@ from django.conf import settings
 
 from .forms import EmailAuthenticationForm, ResendVerificationEmailForm, UserRegistrationForm
 from .models import User, APIToken, SyncQuota
+from .api_responses import api_error_response, is_json_api_request
 from .services import create_local_profile, send_account_activation_email, update_account_email
 from .tokens import account_activation_token
 from document_ai.models import LLMEndpoint
@@ -24,6 +25,7 @@ from document_ai.services.llm_endpoint_service import (
     set_user_rag_model,
     upsert_llm_endpoint,
 )
+from workspaces.models import WorkspaceMembership
 
 
 TERMS_VERSION = "2026-06-03"
@@ -62,13 +64,26 @@ ERROR_DETAILS = {
 }
 
 
-def _render_error(request, status_code, *, message=None):
-    details = ERROR_DETAILS[status_code]
+def _render_error(request, status_code, *, message=None, code=None, details=None):
+    page_details = ERROR_DETAILS[status_code]
+    if is_json_api_request(request):
+        error_codes = {
+            400: "INVALID_REQUEST",
+            403: "PERMISSION_DENIED",
+            404: "NOT_FOUND",
+            500: "INTERNAL_ERROR",
+        }
+        return api_error_response(
+            code or error_codes[status_code],
+            message or page_details["message"],
+            status=status_code,
+            details=details if details is not None else {},
+        )
     content = get_template("errors/error.html").render(
         {
             "status_code": status_code,
-            "error_title": details["title"],
-            "error_message": message or details["message"],
+            "error_title": page_details["title"],
+            "error_message": message or page_details["message"],
         }
     )
     return HttpResponse(content, status=status_code)
@@ -94,7 +109,9 @@ def csrf_failure(request, reason=""):
     return _render_error(
         request,
         403,
+        code="CSRF_FAILED",
         message="보안 확인에 실패했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.",
+        details={"reason": reason} if settings.DEBUG and reason else {},
     )
 
 
@@ -316,8 +333,18 @@ def settings_view(request):
                 update_session_auth_hash(request, request.user)
                 messages.success(request, "비밀번호가 변경되었습니다.")
             return redirect("accounts:settings")
-        elif action == "create_llm_endpoint":
+        elif action in {"create_llm_endpoint", "delete_llm_endpoint", "check_llm_endpoint", "set_rag_model"}:
+            is_admin = (
+                request.workspace_membership is not None
+                and request.workspace_membership.role == WorkspaceMembership.ROLE_ADMIN
+            )
+            if not is_admin:
+                messages.error(request, "이 설정은 워크스페이스 관리자만 변경할 수 있습니다.")
+                return redirect("accounts:settings")
+
+        if action == "create_llm_endpoint":
             endpoint, created = upsert_llm_endpoint(
+                workspace=request.workspace,
                 owner=request.user,
                 name=request.POST.get("endpoint_name", ""),
                 endpoint_type=request.POST.get("endpoint_type", LLMEndpoint.ENDPOINT_OPENAI_COMPATIBLE),
@@ -328,7 +355,7 @@ def settings_view(request):
             if endpoint is None:
                 messages.error(request, "Endpoint 이름, URL, 기본 모델을 입력해주세요.")
             else:
-                checked = check_llm_endpoint(owner=request.user, endpoint_id=str(endpoint.id))
+                checked = check_llm_endpoint(workspace=request.workspace, endpoint_id=str(endpoint.id))
                 action_label = "등록" if created else "갱신"
                 if checked and checked.last_check_status == "ok":
                     messages.success(request, f"AI endpoint가 {action_label}되었습니다. {checked.last_check_message}")
@@ -338,11 +365,11 @@ def settings_view(request):
                     messages.success(request, f"AI endpoint가 {action_label}되었습니다.")
             return redirect("accounts:settings")
         elif action == "delete_llm_endpoint":
-            if delete_llm_endpoint(owner=request.user, endpoint_id=request.POST.get("endpoint_id")):
+            if delete_llm_endpoint(workspace=request.workspace, endpoint_id=request.POST.get("endpoint_id")):
                 messages.success(request, "AI endpoint가 삭제되었습니다.")
             return redirect("accounts:settings")
         elif action == "check_llm_endpoint":
-            endpoint = check_llm_endpoint(owner=request.user, endpoint_id=request.POST.get("endpoint_id"))
+            endpoint = check_llm_endpoint(workspace=request.workspace, endpoint_id=request.POST.get("endpoint_id"))
             if endpoint is None:
                 messages.error(request, "확인할 AI endpoint를 찾을 수 없습니다.")
             elif endpoint.last_check_status == "ok":
@@ -352,7 +379,8 @@ def settings_view(request):
             return redirect("accounts:settings")
         elif action == "set_rag_model":
             set_user_rag_model(
-                user=request.user,
+                workspace=request.workspace,
+                owner=request.user,
                 endpoint_id=request.POST.get("rag_endpoint_id"),
                 rag_model=request.POST.get("rag_model", ""),
             )
@@ -363,10 +391,16 @@ def settings_view(request):
             if not request.user.check_password(confirm_pw):
                 messages.error(request, "비밀번호가 올바르지 않습니다.")
                 return redirect("accounts:settings")
+            from django.core.exceptions import ValidationError
             from django.contrib.auth import logout
+            from workspaces.services import delete_account_with_personal_data
             user = request.user
+            try:
+                delete_account_with_personal_data(user=user)
+            except ValidationError as exc:
+                messages.error(request, "; ".join(exc.messages))
+                return redirect("accounts:settings")
             logout(request)
-            user.delete()
             messages.success(request, "계정이 삭제되었습니다.")
             return redirect("accounts:login")
 
@@ -388,6 +422,11 @@ def settings_view(request):
         "quota_total_gb": total_gb,
         "quota_pct": quota_pct,
         "file_count": file_count,
-        **get_user_llm_settings_context(request.user),
+        "workspace": request.workspace,
+        "is_workspace_admin": (
+            request.workspace_membership is not None
+            and request.workspace_membership.role == WorkspaceMembership.ROLE_ADMIN
+        ),
+        **get_user_llm_settings_context(request.workspace, owner=request.user),
     }
     return render(request, "accounts/settings.html", ctx)

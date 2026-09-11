@@ -408,6 +408,15 @@
     width: 18px; height: 18px;
     fill: currentColor;
   }
+  .compose-send .icon-stop { display: none; }
+  .compose-send.is-streaming { background: var(--accent); filter: brightness(0.8); }
+  .compose-send.is-streaming .icon-send { display: none; }
+  .compose-send.is-streaming .icon-stop { display: block; }
+  .rag-stopped-note {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
   /* ── + popover menu ── */
   .plus-menu {
     display: none;
@@ -715,8 +724,9 @@
           +
         </button>
         <textarea class="rag-textarea" id="ragQuestion" placeholder="문서에 대해 질문하세요" data-i18n-placeholder="questionPlaceholder" rows="1"></textarea>
-        <button type="submit" class="compose-send" id="composeSend">
-          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        <button type="submit" class="compose-send" id="composeSend" data-i18n-title="send" title="전송">
+          <svg class="icon-send" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          <svg class="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
         </button>
       </div>
     </form>
@@ -774,8 +784,10 @@
   const aiReadinessPct = document.getElementById('aiReadinessPct');
   const aiReadinessBadge = document.getElementById('aiReadinessBadge');
   const aiReadinessStats = document.getElementById('aiReadinessStats');
-  let activePollTimer = null;
+  let activeStreamController = null;
   let lastRequest = null;
+  let isStreaming = false;
+  let activePendingMessageId = null;
 
   function t(key, ...args) {
     if (window.DotoriI18n) {
@@ -1047,7 +1059,7 @@
   ragQuestion.addEventListener('input', () => {
     ragQuestion.style.height = 'auto';
     ragQuestion.style.height = `${ragQuestion.scrollHeight}px`;
-    composeSend.disabled = !ragQuestion.value.trim();
+    if (!isStreaming) composeSend.disabled = !ragQuestion.value.trim();
   });
   ragQuestion.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1073,11 +1085,14 @@
 
   ragForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (isStreaming) {
+      stopRagRequest();
+      return;
+    }
     const question = ragQuestion.value.trim();
     if (!question) return;
     startRagRequest(question);
     ragQuestion.style.height = 'auto'; // reset height
-    composeSend.disabled = true;
   });
   document.addEventListener('dotori:languagechange', () => {
     syncRagLanguageFromGlobal();
@@ -1106,24 +1121,29 @@
   }
 
   async function startRagRequest(question, existingPayload = null) {
+    if (activeStreamController) activeStreamController.abort();
+    activeStreamController = new AbortController();
     ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message user">${escapeHtml(question)}</div>`);
     const pendingId = `rag-pending-${Date.now()}`;
     ragMessages.insertAdjacentHTML('beforeend', `<div class="rag-message assistant" id="${pendingId}">${escapeHtml(t('searchStarted'))}</div>`);
+    activePendingMessageId = pendingId;
     ragQuestion.value = '';
     ragMessages.scrollTop = ragMessages.scrollHeight;
     setProgress('search');
+    setStreaming(true);
 
     try {
       const payload = existingPayload || buildPayload(question);
       lastRequest = { question, payload };
 
-      const response = await fetch('/api/document-ai/v1/rag/', {
+      const response = await fetch('/api/document-ai/v1/rag/stream/', {
         method: 'POST',
         headers: {
           'X-CSRFToken': getCookie('csrftoken'),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
+        signal: activeStreamController.signal,
       });
       if (!response.ok) {
         let errorMessage = `RAG request failed: ${response.status}`;
@@ -1135,94 +1155,74 @@
         }
         throw new Error(errorMessage);
       }
-      const data = await response.json();
-      if (data.stage_message) {
-        setMessageHtml(pendingId, escapeHtml(data.stage_message));
+      if (!response.body) throw new Error('Streaming response body is unavailable.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let streamedAnswer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === 'started') {
+            setProgress('generating');
+          } else if (event.type === 'sources') {
+            renderSources(event.citations || [], { preliminary: true });
+          } else if (event.type === 'token') {
+            streamedAnswer += event.text || '';
+            setMessageHtml(pendingId, renderAnswer(streamedAnswer));
+            ragMessages.scrollTop = ragMessages.scrollHeight;
+          } else if (event.type === 'completed') {
+            streamedAnswer = event.answer || streamedAnswer;
+            setMessageHtml(pendingId, renderAnswer(streamedAnswer));
+            renderSources(event.citations || []);
+            appendEvidenceButton(pendingId);
+            setProgress('completed');
+          } else if (event.type === 'error') {
+            throw new Error(event.message || t('answerFailed'));
+          } else if (event.type === 'canceled') {
+            setProgress('canceled');
+          }
+        }
+        if (done) break;
       }
-      setProgress(data.stage || 'searching');
-      pollRagJob(data.job_id, pendingId, 0);
     } catch (error) {
+      if (error?.name === 'AbortError') return;
       setProgress('failed');
       const message = error?.message || t('requestFailed');
       setMessageHtml(pendingId, `${escapeHtml(message)}${renderRetryAction()}`);
       console.error(error);
+    } finally {
+      setStreaming(false);
+      if (activePendingMessageId === pendingId) activePendingMessageId = null;
     }
   }
 
-  function pollRagJob(jobId, messageId, attempt) {
-    if (activePollTimer) clearTimeout(activePollTimer);
-    fetch(`/api/document-ai/v1/rag/jobs/${jobId}/`, {
-      headers: {
-        'X-CSRFToken': getCookie('csrftoken'),
-        'Content-Type': 'application/json',
-      },
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`RAG job poll failed: ${response.status}`);
-        return response.json();
-      })
-      .then((job) => {
-        const messageEl = document.getElementById(messageId);
-        if (!messageEl) return;
+  function setStreaming(active) {
+    isStreaming = active;
+    composeSend.classList.toggle('is-streaming', active);
+    composeSend.disabled = active ? false : !ragQuestion.value.trim();
+    const label = active ? t('stop') : t('send');
+    composeSend.title = label;
+    composeSend.setAttribute('aria-label', label);
+  }
 
-        const currentStage = job.stage || (
-          job.status === 'completed' ? 'completed' :
-          job.status === 'failed' ? 'failed' :
-          job.search_status === 'completed' ? 'generating' :
-          'searching'
-        );
-        const currentMessage = job.stage_message || job.stage_label || '';
-
-        if (job.status === 'completed') {
-          messageEl.innerHTML = renderAnswer(job.answer);
-          const finalSources = job.citations && job.citations.length
-            ? job.citations
-            : flattenSearchResults(job.search_results || []);
-          renderSources(finalSources);
-          appendEvidenceButton(messageId);
-          setProgress(currentStage);
-          ragMessages.scrollTop = ragMessages.scrollHeight;
-          return;
-        }
-
-        if (job.status === 'failed') {
-          setProgress(currentStage);
-          messageEl.innerHTML = `${escapeHtml(currentMessage || job.error_message || t('answerFailed'))}${renderRetryAction()}`;
-          const failedSources = job.citations && job.citations.length
-            ? job.citations
-            : flattenSearchResults(job.search_results || []);
-          renderSources(failedSources);
-          if (failedSources.length > 0) appendEvidenceButton(messageId);
-          return;
-        }
-
-        if (currentStage === 'generating' || job.search_status === 'completed') {
-          const preliminarySources = flattenSearchResults(job.search_results || []);
-          setProgress(currentStage);
-          if (preliminarySources.length) {
-            renderSources(preliminarySources, { preliminary: true });
-            messageEl.textContent = currentMessage || t('foundEvidence', preliminarySources.length);
-          } else {
-            messageEl.textContent = currentMessage || t('noPreliminaryEvidence');
-          }
-        } else {
-          setProgress(currentStage);
-          messageEl.textContent = currentMessage || t('searchingDocuments');
-        }
-
-        if (attempt >= 120) {
-          setProgress('failed');
-          messageEl.innerHTML = `${escapeHtml(t('jobStillProcessing'))}${renderRetryAction(t('rerunSameQuestion'))}`;
-          return;
-        }
-        activePollTimer = setTimeout(() => pollRagJob(jobId, messageId, attempt + 1), 1500);
-      })
-      .catch((error) => {
-        const messageEl = document.getElementById(messageId);
-        setProgress('failed');
-        if (messageEl) messageEl.innerHTML = `${escapeHtml(t('statusPollFailed'))}${renderRetryAction()}`;
-        console.error(error);
-      });
+  function stopRagRequest() {
+    if (!activeStreamController) return;
+    const pendingId = activePendingMessageId;
+    activeStreamController.abort();
+    setProgress('canceled');
+    setStreaming(false);
+    if (pendingId) {
+      const messageEl = document.getElementById(pendingId);
+      if (messageEl) {
+        messageEl.insertAdjacentHTML('beforeend', `<div class="rag-stopped-note">${escapeHtml(t('generationStopped'))}</div>`);
+      }
+    }
   }
 
   function renderAnswer(answer) {

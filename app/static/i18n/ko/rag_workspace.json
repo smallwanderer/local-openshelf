@@ -45,6 +45,8 @@
   "ragIntro": "질문을 입력하면 관련 문서를 먼저 찾고, 이어서 근거 기반 답변을 생성합니다.",
   "questionPlaceholder": "문서에 대해 질문하세요",
   "send": "전송",
+  "stop": "생성 중단",
+  "generationStopped": "생성이 중단되었습니다.",
   "evidenceDocuments": "근거 문서",
   "sourcesIntro": "질문을 입력하면 검색된 근거가 여기에 표시됩니다.",
   "searchStarted": "검색 작업을 시작했습니다.",

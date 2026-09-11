@@ -17,23 +17,25 @@ import os
 import uuid
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from accounts.models import SyncQuota
+from accounts.client_identity import serialize_client_identity
 from config.enums import NodeType
 from files.models import FileBlob, Node
 from files.services import file_service
 from files.services.storage import ALLOWED_EXTENSIONS, save_file
-from files.services.utils import extract_ext
+from files.services.utils import calculate_sha256
 
 from .auth import api_token_required
 
 logger = logging.getLogger(__name__)
 
 SYNC_ROOT_PREFIX = "sync"
+MAX_REL_PATH_LENGTH = 900
 
 
 def _json_body(request):
@@ -43,31 +45,130 @@ def _json_body(request):
         return {}
 
 
-def _get_or_create_sync_root(user, folder_name):
+def _normalize_root_name(value):
+    if not isinstance(value, str):
+        raise ValueError("root_name must be a string.")
+    root_name = value.strip()
+    if (
+        not root_name
+        or root_name in {".", ".."}
+        or "/" in root_name
+        or "\\" in root_name
+        or "\x00" in root_name
+        or len(root_name) > 255
+    ):
+        raise ValueError("root_name must be one valid folder name.")
+    return root_name
+
+
+def _normalize_rel_path(value):
+    if not isinstance(value, str):
+        raise ValueError("rel_path must be a string.")
+    normalized = value.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or normalized.endswith("/")
+        or "\x00" in normalized
+        or len(normalized) > MAX_REL_PATH_LENGTH
+    ):
+        raise ValueError("rel_path must be a non-empty relative path.")
+    parts = normalized.split("/")
+    if any(not part or part in {".", ".."} or len(part) > 255 for part in parts):
+        raise ValueError("rel_path contains an invalid path segment.")
+    return "/".join(parts)
+
+
+def _restore_folder_if_needed(node):
+    if node.trashed:
+        node.trashed = False
+        node.deleted_at = None
+        node.ai_processing_enabled = True
+        node.save(
+            update_fields=[
+                "trashed",
+                "deleted_at",
+                "ai_processing_enabled",
+                "updated_at",
+            ]
+        )
+    return node
+
+
+def _get_or_create_sync_root(workspace, user, folder_name):
     """Get or create the /sync/<folder_name>/ node hierarchy.
 
     Returns the leaf folder Node.
     """
+    folder_name = _normalize_root_name(folder_name)
     # 1. Ensure /sync/ root folder exists
     sync_root, _ = Node.objects.get_or_create(
-        owner=user,
+        workspace=workspace,
         name=SYNC_ROOT_PREFIX,
         parent=None,
         node_type=NodeType.FOLDER,
-        defaults={"ext": ""},
+        defaults={"ext": "", "owner": user},
     )
+    _restore_folder_if_needed(sync_root)
     # 2. Ensure /sync/<folder_name>/ exists
     target_folder, _ = Node.objects.get_or_create(
-        owner=user,
+        workspace=workspace,
         name=folder_name,
         parent=sync_root,
         node_type=NodeType.FOLDER,
-        defaults={"ext": ""},
+        defaults={"ext": "", "owner": user},
     )
-    return target_folder
+    return _restore_folder_if_needed(target_folder)
 
 
-def _ensure_parent_dirs(user, sync_folder, rel_path):
+def _resolve_sync_folder(workspace, user, *, root_uid="", root_name="default", create=True):
+    if root_uid:
+        try:
+            sync_folder = Node.objects.select_related("parent").get(
+                workspace=workspace,
+                uid=root_uid,
+                node_type=NodeType.FOLDER,
+                trashed=False,
+            )
+        except (Node.DoesNotExist, ValueError):
+            raise ValueError("Unknown or inactive sync root.")
+        parent = sync_folder.parent
+        if (
+            parent is None
+            or parent.workspace_id != workspace.id
+            or parent.parent_id is not None
+            or parent.name != SYNC_ROOT_PREFIX
+            or parent.node_type != NodeType.FOLDER
+            or parent.trashed
+        ):
+            raise ValueError("root_uid does not identify a sync root.")
+        return sync_folder
+    if create:
+        return _get_or_create_sync_root(workspace, user, root_name)
+    root_name = _normalize_root_name(root_name)
+    try:
+        return Node.objects.get(
+            workspace=workspace,
+            name=root_name,
+            parent__workspace=workspace,
+            parent__name=SYNC_ROOT_PREFIX,
+            parent__parent=None,
+            parent__node_type=NodeType.FOLDER,
+            parent__trashed=False,
+            node_type=NodeType.FOLDER,
+            trashed=False,
+        )
+    except Node.DoesNotExist:
+        raise ValueError("Unknown or inactive sync root.")
+
+
+def _is_within_sync_folder(node, sync_folder):
+    return node.pk != sync_folder.pk and node.path.startswith(
+        sync_folder.path.rstrip("/") + "/"
+    )
+
+
+def _ensure_parent_dirs(workspace, user, sync_folder, rel_path):
     """Ensure all parent directories for rel_path exist under sync_folder.
 
     For rel_path="a/b/c/file.txt", creates folders a, a/b, a/b/c if needed.
@@ -80,14 +181,30 @@ def _ensure_parent_dirs(user, sync_folder, rel_path):
     parent = sync_folder
     for dir_name in parts[:-1]:
         child, _ = Node.objects.get_or_create(
-            owner=user,
+            workspace=workspace,
             name=dir_name,
             parent=parent,
             node_type=NodeType.FOLDER,
-            defaults={"ext": ""},
+            defaults={"ext": "", "owner": user},
         )
-        parent = child
+        parent = _restore_folder_if_needed(child)
     return parent
+
+
+def _ensure_directory(workspace, user, sync_folder, rel_path):
+    parent = sync_folder
+    final_created = False
+    for dir_name in rel_path.split("/"):
+        child, created = Node.objects.get_or_create(
+            workspace=workspace,
+            name=dir_name,
+            parent=parent,
+            node_type=NodeType.FOLDER,
+            defaults={"ext": "", "owner": user},
+        )
+        parent = _restore_folder_if_needed(child)
+        final_created = created
+    return parent, final_created
 
 
 def _check_sync_quota(user, file_size):
@@ -123,6 +240,13 @@ def ping(request):
 
 
 @csrf_exempt
+@require_http_methods(["GET"])
+@api_token_required
+def identity(request):
+    return JsonResponse(serialize_client_identity(request.api_token))
+
+
+@csrf_exempt
 @require_http_methods(["POST"])
 @api_token_required
 def diff(request):
@@ -131,23 +255,44 @@ def diff(request):
     entries = data.get("entries", [])
     root_path = data.get("root_path", "")
 
-    if not entries and not root_path:
+    if not isinstance(entries, list):
+        return JsonResponse({"ok": False, "errors": ["entries must be a list."]}, status=400)
+    if not entries and not root_path and not data.get("root_name"):
         return JsonResponse({"ok": False, "errors": ["Empty manifest."]}, status=400)
 
-    # Derive folder name from root_path
-    folder_name = os.path.basename(root_path.rstrip("/")) or "default"
-    sync_folder = _get_or_create_sync_root(request.user, folder_name)
+    # root_name avoids sending a client absolute path and lets callers
+    # disambiguate two local roots that happen to share the same basename.
+    folder_name = (
+        data.get("root_name")
+        or os.path.basename(str(root_path).rstrip("/\\"))
+        or "default"
+    )
+    try:
+        folder_name = _normalize_root_name(folder_name)
+        try:
+            sync_folder = _resolve_sync_folder(
+                request.workspace,
+                request.user,
+                root_name=folder_name,
+                create=False,
+            )
+        except ValueError:
+            sync_folder = None
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "errors": [str(exc)]}, status=400)
 
     # Build server-side path→node index under sync folder
-    server_nodes = Node.objects.filter(
-        owner=request.user,
-        path__startswith=sync_folder.path,
-        trashed=False,
-    ).select_related("blob")
+    if sync_folder is None:
+        server_nodes = []
+        sync_prefix = ""
+    else:
+        sync_prefix = sync_folder.path.rstrip("/") + "/"
+        server_nodes = Node.objects.filter(workspace=request.workspace, trashed=False).filter(
+            Q(pk=sync_folder.pk) | Q(path__startswith=sync_prefix)
+        ).select_related("blob")
 
     # Map: relative path (from sync_folder) → node
     server_map = {}
-    sync_prefix = sync_folder.path.rstrip("/") + "/"
     for node in server_nodes:
         if node.pk == sync_folder.pk:
             continue
@@ -160,16 +305,44 @@ def diff(request):
     actions = []
     sync_id = uuid.uuid4().hex[:12]
 
-    for entry in entries:
-        rel_path = entry.get("rel_path", "")
-        if not rel_path:
-            continue
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return JsonResponse(
+                {"ok": False, "errors": [f"entries[{index}] must be an object."]},
+                status=400,
+            )
+        try:
+            rel_path = _normalize_rel_path(entry.get("rel_path", ""))
+        except ValueError as exc:
+            return JsonResponse(
+                {"ok": False, "errors": [f"entries[{index}]: {exc}"]},
+                status=400,
+            )
+        if rel_path in client_set:
+            return JsonResponse(
+                {"ok": False, "errors": [f"Duplicate rel_path: {rel_path}"]},
+                status=400,
+            )
         client_set.add(rel_path)
         is_dir = entry.get("is_dir", False)
+        if not isinstance(is_dir, bool):
+            return JsonResponse(
+                {"ok": False, "errors": [f"entries[{index}].is_dir must be a boolean."]},
+                status=400,
+            )
         content_hash = entry.get("content_hash", "")
 
         if rel_path in server_map:
             server_node = server_map[rel_path]
+            server_is_dir = server_node.node_type == NodeType.FOLDER
+            if server_is_dir != is_dir:
+                actions.append({
+                    "rel_path": rel_path,
+                    "action": "conflict",
+                    "reason": "type_mismatch",
+                    "server_node_uid": str(server_node.uid),
+                })
+                continue
             if is_dir:
                 continue  # directory exists, nothing to do
             # Compare hash
@@ -188,15 +361,28 @@ def diff(request):
                 actions.append({"rel_path": rel_path, "action": "upload"})
 
     # Detect deletions: server has it, client doesn't
-    for rel_path, node in server_map.items():
-        if rel_path not in client_set:
+    missing_server_paths = []
+    for rel_path, node in sorted(
+        server_map.items(),
+        key=lambda item: (item[0].count("/"), item[0]),
+    ):
+        if rel_path not in client_set and not any(
+            rel_path.startswith(parent_path + "/") for parent_path in missing_server_paths
+        ):
+            missing_server_paths.append(rel_path)
             actions.append({
                 "rel_path": rel_path,
                 "action": "delete",
                 "server_node_uid": str(node.uid),
             })
 
-    return JsonResponse({"ok": True, "actions": actions, "sync_id": sync_id})
+    return JsonResponse({
+        "ok": True,
+        "actions": actions,
+        "sync_id": sync_id,
+        "root_name": folder_name,
+        "root_uid": str(sync_folder.uid) if sync_folder is not None else "",
+    })
 
 
 @csrf_exempt
@@ -208,13 +394,19 @@ def upload(request):
         return JsonResponse({"ok": False, "errors": ["No file provided."]}, status=400)
 
     uploaded_file = request.FILES["file"]
-    rel_path = request.POST.get("rel_path", "")
-    sync_id = request.POST.get("sync_id", "")
-    content_hash = request.POST.get("content_hash", "")
+    rel_path_value = request.POST.get("rel_path", "")
     ai_processing_value = request.POST.get("ai_processing_enabled")
 
-    if not rel_path:
-        return JsonResponse({"ok": False, "errors": ["rel_path is required."]}, status=400)
+    try:
+        rel_path = _normalize_rel_path(rel_path_value)
+        sync_folder = _resolve_sync_folder(
+            request.workspace,
+            request.user,
+            root_uid=request.POST.get("root_uid", ""),
+            root_name=request.POST.get("root_name") or request.POST.get("folder_name", "default"),
+        )
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "errors": [str(exc)]}, status=400)
 
     # Extension check
     ext = os.path.splitext(rel_path)[1].lower()
@@ -224,54 +416,46 @@ def upload(request):
             status=400,
         )
 
-    # Quota check
-    ok, err = _check_sync_quota(request.user, uploaded_file.size)
-    if not ok:
-        return JsonResponse({"ok": False, "errors": [err]}, status=400)
-
-    # Derive folder from the sync config stored in local db
-    # For now, extract from rel_path structure
-    folder_name = request.POST.get("folder_name", "default")
-    # Try to get it from existing sync root
-    try:
-        sync_root = Node.objects.get(
-            owner=request.user,
-            name=SYNC_ROOT_PREFIX,
-            parent=None,
-            node_type=NodeType.FOLDER,
-        )
-        # Find the first child folder as the sync target
-        children = Node.objects.filter(
-            owner=request.user,
-            parent=sync_root,
-            node_type=NodeType.FOLDER,
-            trashed=False,
-        ).order_by("-created_at")
-        if children.exists():
-            sync_folder = children.first()
-        else:
-            sync_folder = _get_or_create_sync_root(request.user, folder_name)
-    except Node.DoesNotExist:
-        sync_folder = _get_or_create_sync_root(request.user, folder_name)
-
-    parent = _ensure_parent_dirs(request.user, sync_folder, rel_path)
+    parent = _ensure_parent_dirs(request.workspace, request.user, sync_folder, rel_path)
 
     try:
         # Check if node already exists (update case)
         file_name = rel_path.split("/")[-1]
         existing = Node.objects.filter(
-            owner=request.user,
+            workspace=request.workspace,
             parent=parent,
             name=file_name,
             node_type=NodeType.FILE,
-            trashed=False,
         ).first()
+        old_size = (
+            existing.blob.size or 0
+            if existing and hasattr(existing, "blob")
+            else 0
+        )
+        quota_delta = max(0, uploaded_file.size - old_size)
+        ok, err = _check_sync_quota(request.user, quota_delta)
+        if not ok:
+            return JsonResponse({"ok": False, "errors": [err]}, status=400)
 
-        if existing and hasattr(existing, "blob"):
+        if existing:
             # Update: delete old blob, create new one
-            old_size = existing.blob.size or 0
+            content_hash = calculate_sha256(uploaded_file)
+            uploaded_file.seek(0)
             with transaction.atomic():
-                existing.blob.delete()
+                if hasattr(existing, "blob"):
+                    existing.blob.delete()
+                existing.trashed = False
+                existing.deleted_at = None
+                if ai_processing_value is not None:
+                    existing.ai_processing_enabled = _bool_from_request(ai_processing_value)
+                existing.save(
+                    update_fields=[
+                        "trashed",
+                        "deleted_at",
+                        "ai_processing_enabled",
+                        "updated_at",
+                    ]
+                )
                 FileBlob.objects.create(
                     node=existing,
                     file=uploaded_file,
@@ -280,9 +464,6 @@ def upload(request):
                     mime_type=getattr(uploaded_file, "content_type", ""),
                     sha256=content_hash,
                 )
-                if ai_processing_value is not None:
-                    existing.ai_processing_enabled = _bool_from_request(ai_processing_value)
-                    existing.save(update_fields=["ai_processing_enabled", "updated_at"])
             # Adjust quota: subtract old, add new
             SyncQuota.objects.filter(user=request.user).update(
                 used_size=F("used_size") - old_size + uploaded_file.size
@@ -291,10 +472,12 @@ def upload(request):
                 "ok": True,
                 "node_uid": str(existing.uid),
                 "action": "updated",
+                "root_uid": str(sync_folder.uid),
             })
 
         # New file: use existing save_file to trigger the full pipeline
         node = save_file(
+            workspace=request.workspace,
             owner=request.user,
             file=uploaded_file,
             description=f"synced: {rel_path}",
@@ -309,6 +492,7 @@ def upload(request):
             "ok": True,
             "node_uid": str(node.uid),
             "action": "created",
+            "root_uid": str(sync_folder.uid),
         })
     except Exception as exc:
         logger.exception("Sync upload failed for %s", rel_path)
@@ -321,39 +505,23 @@ def upload(request):
 def mkdir(request):
     """Create a directory node in the sync folder."""
     data = _json_body(request)
-    rel_path = data.get("rel_path", "")
-    if not rel_path:
-        return JsonResponse({"ok": False, "errors": ["rel_path is required."]}, status=400)
-
-    folder_name = data.get("folder_name", "default")
     try:
-        sync_root = Node.objects.get(
-            owner=request.user, name=SYNC_ROOT_PREFIX,
-            parent=None, node_type=NodeType.FOLDER,
+        rel_path = _normalize_rel_path(data.get("rel_path", ""))
+        sync_folder = _resolve_sync_folder(
+            request.workspace,
+            request.user,
+            root_uid=data.get("root_uid", ""),
+            root_name=data.get("root_name") or data.get("folder_name", "default"),
         )
-        children = Node.objects.filter(
-            owner=request.user, parent=sync_root,
-            node_type=NodeType.FOLDER, trashed=False,
-        ).order_by("-created_at")
-        sync_folder = children.first() if children.exists() else _get_or_create_sync_root(request.user, folder_name)
-    except Node.DoesNotExist:
-        sync_folder = _get_or_create_sync_root(request.user, folder_name)
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "errors": [str(exc)]}, status=400)
 
-    parent = _ensure_parent_dirs(request.user, sync_folder, rel_path + "/dummy")
-    # The last part of rel_path is the directory to create
-    dir_name = rel_path.split("/")[-1]
-
-    node, created = Node.objects.get_or_create(
-        owner=request.user,
-        name=dir_name,
-        parent=parent if rel_path.count("/") > 0 else sync_folder,
-        node_type=NodeType.FOLDER,
-        defaults={"ext": ""},
-    )
+    node, created = _ensure_directory(request.workspace, request.user, sync_folder, rel_path)
     return JsonResponse({
         "ok": True,
         "node_uid": str(node.uid),
         "created": created,
+        "root_uid": str(sync_folder.uid),
     })
 
 
@@ -364,19 +532,83 @@ def delete(request):
     """Soft-delete nodes by UID."""
     data = _json_body(request)
     node_uids = data.get("node_uids", [])
-    if not node_uids:
+    if not isinstance(node_uids, list) or not node_uids:
         return JsonResponse({"ok": False, "errors": ["node_uids is required."]}, status=400)
+    if len(node_uids) > 1000:
+        return JsonResponse({"ok": False, "errors": ["At most 1000 nodes may be deleted at once."]}, status=400)
+    has_root_selector = bool(
+        data.get("root_uid") or data.get("root_name") or data.get("folder_name")
+    )
+    sync_folder = None
+    if has_root_selector:
+        try:
+            sync_folder = _resolve_sync_folder(
+                request.workspace,
+                request.user,
+                root_uid=data.get("root_uid", ""),
+                root_name=data.get("root_name") or data.get("folder_name", "default"),
+                create=False,
+            )
+        except ValueError as exc:
+            return JsonResponse({"ok": False, "errors": [str(exc)]}, status=400)
 
-    deleted = 0
+    nodes = []
+    invalid_uids = []
+    legacy_root_names = set()
     for uid in node_uids:
         try:
-            node = Node.objects.get(uid=uid, owner=request.user, trashed=False)
+            node = Node.objects.get(uid=uid, workspace=request.workspace, trashed=False)
+        except (Node.DoesNotExist, ValueError, TypeError):
+            invalid_uids.append(str(uid))
+            continue
+        if sync_folder is not None:
+            if not _is_within_sync_folder(node, sync_folder):
+                invalid_uids.append(str(uid))
+                continue
+        else:
+            path_parts = node.path.strip("/").split("/")
+            if len(path_parts) < 3 or path_parts[0] != SYNC_ROOT_PREFIX:
+                invalid_uids.append(str(uid))
+                continue
+            legacy_root_names.add(path_parts[1])
+        nodes.append(node)
+
+    if len(legacy_root_names) > 1:
+        invalid_uids.extend(str(uid) for uid in node_uids)
+
+    if invalid_uids:
+        return JsonResponse(
+            {
+                "ok": False,
+                "errors": ["Every node must exist inside the selected sync root."],
+                "invalid_node_uids": invalid_uids,
+            },
+            status=400,
+        )
+
+    if sync_folder is None:
+        try:
+            sync_folder = _resolve_sync_folder(
+                request.workspace,
+                request.user,
+                root_name=next(iter(legacy_root_names)),
+                create=False,
+            )
+        except (StopIteration, ValueError):
+            return JsonResponse(
+                {"ok": False, "errors": ["Cannot resolve the legacy sync root."]},
+                status=400,
+            )
+
+    deleted = 0
+    with transaction.atomic():
+        for node in nodes:
+            if node.trashed:
+                continue
             file_service.move_to_trash(node)
             deleted += 1
-        except Node.DoesNotExist:
-            logger.warning("Sync delete: node %s not found", uid)
 
-    return JsonResponse({"ok": True, "deleted": deleted})
+    return JsonResponse({"ok": True, "deleted": deleted, "root_uid": str(sync_folder.uid)})
 
 
 @csrf_exempt

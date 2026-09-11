@@ -1,12 +1,15 @@
 name: dotori
 
-x-dotori-app: &dotori-app
-  image: dotori-app:local
-  build:
-    context: ./app
-    args:
-      INSTALL_AI_DEPS: "1"
-      INSTALL_DEV_DEPS: "0"
+x-dotori-ai-build: &dotori-ai-build
+  context: .
+  dockerfile: app/Dockerfile
+  target: backend
+  args:
+    # Parser and embedding both use Torch.  Keep one shared AI image while
+    # separating their runtime roles and model ownership by process.
+    INSTALL_AI_DEPS: "1"
+    INSTALL_PARSER_DOCLING: "1"
+    INSTALL_TEST_DEPS: "0"
 
 services:
   db:
@@ -41,28 +44,49 @@ services:
       retries: 10
 
   app:
-    <<: *dotori-app
+    # app never loads BGE-M3/docling (embedding-executor's model process does,
+    # exclusively — see RemoteBGEM3Provider). Its own image skips
+    # requirements.ai.txt (torch, FlagEmbedding, sentence-transformers) and
+    # requirements.parser-docling.txt (docling, torchvision, tesseract-ocr),
+    # so rebuilds are fast and don't pull multi-GB AI wheels.
+    image: dotori-app-web:local
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+      target: web
+      args:
+        INSTALL_AI_DEPS: "0"
+        INSTALL_PARSER_DOCLING: "0"
+        INSTALL_TEST_DEPS: "0"
     container_name: app
     restart: unless-stopped
     env_file:
       - .env
     environment:
       DOTORI_DJANGO_ALLOWED_HOSTS: ${DOTORI_DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DOTORI_DJANGO_CSRF_TRUSTED_ORIGINS: ${DOTORI_DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1}
+      # 4173 is the local Vite dev server. Production serves the SPA from the
+      # same origin and should override this list with its HTTPS origin.
+      DOTORI_DJANGO_CSRF_TRUSTED_ORIGINS: ${DOTORI_DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:4173,http://127.0.0.1:4173}
       DOTORI_DJANGO_SECURE_PROXY_SSL_HEADER: ${DOTORI_DJANGO_SECURE_PROXY_SSL_HEADER:-0}
       DOTORI_DJANGO_SECURE_SSL_REDIRECT: ${DOTORI_DJANGO_SECURE_SSL_REDIRECT:-0}
       DOTORI_DJANGO_SESSION_COOKIE_SECURE: ${DOTORI_DJANGO_SESSION_COOKIE_SECURE:-0}
       DOTORI_DJANGO_CSRF_COOKIE_SECURE: ${DOTORI_DJANGO_CSRF_COOKIE_SECURE:-0}
+      DOTORI_SPA_ENABLED: ${DOTORI_SPA_ENABLED:-1}
       RUNTIME_SCOPE: production
+      SERVICE_NAME: app
+      EMBEDDING_SERVICE_URL: http://embedding-executor:${EMBEDDING_SERVICE_PORT:-8001}
     volumes:
       - ./data/uploads:/data/uploads
       - ./data/staticfiles:/app/staticfiles
       - ./data/logs:/data/logs
+      - ./data/evaluation:/data/evaluation
       - ./data/config:/data/config
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      embedding-executor:
         condition: service_healthy
     networks:
       - default
@@ -72,7 +96,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     command: >
-      bash -lc "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+      bash -lc "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn config.asgi:application --worker-class uvicorn_worker.UvicornWorker --bind 0.0.0.0:8000 --workers $${WEB_CONCURRENCY:-2} --timeout $${GUNICORN_TIMEOUT:-360}"
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/files/healthcheck/')" ]
       interval: 3s
@@ -84,14 +108,23 @@ services:
     profiles: [ "test" ]
     image: dotori-app-test:local
     build:
-      context: ./app
+      context: .
+      dockerfile: app/Dockerfile
+      target: backend
       args:
         INSTALL_AI_DEPS: "1"
-        INSTALL_DEV_DEPS: "1"
+        INSTALL_PARSER_DOCLING: "1"
+        INSTALL_TEST_DEPS: "1"
     env_file:
       - .env
     volumes:
       - ./installation:/app/installation:ro
+      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+    # Resource-snapshot tests need the production config mount point to exist,
+    # but must never inspect or mutate the host's real runtime configuration.
+    tmpfs:
+      - /data/config
+      - /data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -99,86 +132,125 @@ services:
         condition: service_healthy
     command: [ "python", "-m", "pytest" ]
 
-  embedding-worker:
-    <<: *dotori-app
-    container_name: embedding-worker
+  embedding-executor:
+    # The only process that loads BGE-M3. Parsing and document-embedding Celery
+    # work run in independent services below, but both proxy model calls to
+    # this internal HTTP endpoint so the model remains loaded exactly once.
+    image: dotori-app:local
+    build: *dotori-ai-build
+    container_name: embedding-executor
     restart: unless-stopped
+    # Relative CPU priority, not a hard cap: app and dotori-llm are left at
+    # Docker's default (1024), so under real contention (embedding running
+    # while the LLM is generating) the scheduler favors them over
+    # embedding-executor. When the host is idle, embedding-executor can still use
+    # every core it wants -- this only bites when cores are actually contested.
+    cpu_shares: ${EMBEDDING_MODEL_CPU_SHARES:-256}
     env_file:
       - .env
     volumes:
-      - ./data/uploads:/data/uploads
-      - ./data/logs:/data/logs
-      - ./data/config:/data/config:ro
-      - huggingface-cache:/app/.cache/huggingface
-    environment:
-      RUNTIME_SCOPE: production
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q parse,embed --concurrency=$${DOCUMENT_AI_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
-
-  search-worker:
-    <<: *dotori-app
-    container_name: search-worker
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data/uploads:/data/uploads
-      - ./data/logs:/data/logs
-      - ./data/config:/data/config:ro
-      - huggingface-cache:/app/.cache/huggingface
-    environment:
-      RUNTIME_SCOPE: production
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q search --concurrency=$${SEARCH_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
-
-  rag-worker:
-    <<: *dotori-app
-    profiles: [ "managed-rag" ]
-    container_name: rag-worker
-    # The external runtime lifecycle starts this worker only after the
-    # selected runtime validates. Do not auto-start it on Docker daemon boot.
-    restart: on-failure:5
-    env_file:
-      - .env
-    environment:
-      RUNTIME_SCOPE: production
-    volumes:
-      - ./data/uploads:/data/uploads
       - ./data/logs:/data/logs
       - ./data/config:/data/config
+      - huggingface-cache:/app/.cache/huggingface
+    environment:
+      RUNTIME_SCOPE: production
+      SERVICE_NAME: embedding-executor
+      DOTORI_SERVICE_ROLE: embedding-model
+      DOTORI_EXECUTOR_ROLE: embedding
+      # embedding-executor is the only process allowed to load BGE-M3. app calls
+      # /embed/ over the compose network instead of loading the model itself;
+      # this Host header must be accepted.
+      DOTORI_DJANGO_ALLOWED_HOSTS: embedding-executor,localhost,127.0.0.1
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - default
-      - rag-runtime
-    command: [ "bash", "-lc", "celery -A config worker -l info -Q rag --concurrency=$${RAG_WORKER_CONCURRENCY:-1} --prefetch-multiplier=1" ]
+    expose:
+      - "${EMBEDDING_SERVICE_PORT:-8001}"
+    # One model-owning process. Increasing --workers would duplicate BGE-M3.
+    command: [ "bash", "-lc", "DOTORI_EMBEDDING_MODEL_PROCESS=1 exec gunicorn config.wsgi:application --bind 0.0.0.0:$${EMBEDDING_SERVICE_PORT:-8001} --workers 1 --threads $${EMBEDDING_HTTP_THREADS:-8} --timeout $${EMBEDDING_EXECUTOR_TIMEOUT:-1860}" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${EMBEDDING_SERVICE_PORT:-8001}/readyz')" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
-  recovery-worker:
-    <<: *dotori-app
-    container_name: recovery-worker
+  parser-executor:
+    image: dotori-app:local
+    container_name: parser-executor
     restart: unless-stopped
+    cpu_shares: ${PARSE_WORKER_CPU_SHARES:-256}
     env_file:
       - .env
     volumes:
       - ./data/uploads:/data/uploads
       - ./data/logs:/data/logs
+      - ./data/config:/data/config:ro
+      - huggingface-cache:/app/.cache/huggingface
+    environment:
+      RUNTIME_SCOPE: production
+      SERVICE_NAME: parser-executor
+      DOTORI_SERVICE_ROLE: parser
+      DOTORI_EXECUTOR_ROLE: parser
+      DOTORI_DJANGO_ALLOWED_HOSTS: parser-executor,localhost,127.0.0.1
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: [ "bash", "-lc", "celery -A config beat -l info" ]
+    expose:
+      - "${PARSER_EXECUTOR_PORT:-8002}"
+    command: [ "gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:${PARSER_EXECUTOR_PORT:-8002}", "--workers", "1", "--threads", "${PARSER_EXECUTOR_HTTP_THREADS:-2}", "--timeout", "${PARSER_EXECUTOR_TIMEOUT:-1860}" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${PARSER_EXECUTOR_PORT:-8002}/readyz')" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  dotori-orchestrator:
+    # Queue transport only: this image intentionally excludes AI and Docling
+    # dependencies. It dispatches durable work to the two executor HTTP APIs.
+    image: dotori-orchestrator:local
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+      target: backend
+      args:
+        INSTALL_AI_DEPS: "0"
+        INSTALL_PARSER_DOCLING: "0"
+        INSTALL_TEST_DEPS: "0"
+    container_name: dotori-orchestrator
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data/logs:/data/logs
+      - ./data/config:/data/config:ro
+    environment:
+      RUNTIME_SCOPE: production
+      SERVICE_NAME: dotori-orchestrator
+      DOTORI_SERVICE_ROLE: orchestrator
+      PARSER_EXECUTOR_URL: http://parser-executor:${PARSER_EXECUTOR_PORT:-8002}
+      EMBEDDING_SERVICE_URL: http://embedding-executor:${EMBEDDING_SERVICE_PORT:-8001}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      parser-executor:
+        condition: service_healthy
+      embedding-executor:
+        condition: service_healthy
+    command: [ "celery", "-A", "config", "worker", "-P", "threads", "-l", "info", "-Q", "parse,embed", "--concurrency=${ORCHESTRATOR_CONCURRENCY:-2}", "--prefetch-multiplier=1", "--hostname=orchestrator@%h" ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import os; from config.celery import app; raise SystemExit(0 if app.control.ping(destination=['orchestrator@' + os.uname().nodename], timeout=2) else 1)" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   nginx:
     image: nginx:stable
@@ -207,9 +279,9 @@ services:
   # intentionally NOT defined here. It's a single, scope-scoped container
   # ("dotori-llm") managed directly by
   # app/llm_installation/runtime_lifecycle.py (plain docker build/run/stop/rm),
-  # reachable from app/rag-worker at http://rag-runtime:8080 over the
+  # reachable from app at http://rag-runtime:8080 over the
   # named "rag-runtime" network below. See
-  # dev-docs/agent/rag_runtime_container_lifecycle.md.
+  # dev-docs/agent/rag-runtime-container-lifecycle.md.
 
 networks:
   rag-runtime:

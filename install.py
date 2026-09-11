@@ -90,6 +90,13 @@ def run_interactive_command(cmd):
 sys.path.append(os.path.join(os.path.dirname(__file__), "app"))
 
 from document_ai.services.rag_runtime_config import load_llm_runtime_config
+from llm_installation.embedding_probe import (
+    build_external_embedding_entry,
+    load_active_embedding_runtime_summary,
+    load_host_embedding_catalog,
+    probe_openai_embedding_endpoint,
+    stage_external_embedding_generation,
+)
 from llm_installation.installer_adapter import (
     detect_hardware,
 )
@@ -115,9 +122,12 @@ from installation.network_access import (
 from installation.network_access.files import configuration_directory, read_env_file as read_network_env_file
 from installation.deployment import (
     ALL_WORKER_SERVICES,
+    DOCUMENT_RUNTIME_RESTART_SERVICES,
     build_deployment_plan,
     compose_up_command,
+    embedding_runtime_change_command,
     read_deployment_plan,
+    worker_services_for_lifecycle,
     write_deployment_plan,
 )
 
@@ -166,14 +176,23 @@ def initialize_embedding_runtime_config(
     ) as profile_file:
         profile = json.load(profile_file)
 
+    known_providers = {"bgem3_hybrid", "sentence_transformers", "openai_compatible"}
+    known_stores = {
+        "pgvector_chunk_1024": 1024,
+        "pgvector_chunk_640": 640,
+        "pgvector_chunk_768": 768,
+        "pgvector_chunk_1536": 1536,
+        "pgvector_chunk_384": 384,
+    }
+
     if (
         profile.get("availability") != "supported"
         or priority_preset not in profile.get("presets", [])
         or profile.get("model_id") != model.get("id")
-        or profile.get("provider") != "bgem3_hybrid"
-        or profile.get("store") != "pgvector_chunk_1024"
-        or int(profile.get("dimension", 0)) != 1024
-        or int(model.get("dimension", 0)) != 1024
+        or profile.get("provider") not in known_providers
+        or profile.get("store") not in known_stores
+        or int(profile.get("dimension", 0)) != int(model.get("dimension", 0))
+        or known_stores.get(profile.get("store")) != int(profile.get("dimension", 0))
     ):
         raise RuntimeError(
             "The checked-in embedding catalog has no valid supported "
@@ -233,12 +252,59 @@ def write_env_file(source_path, target_path, updates):
     print(f"{GREEN}• Updated configuration: {target_path}{RESET}")
     return True
 
+def _create_windows_shortcut(shortcut_path, target_path, working_directory, icon_path=None, description=None):
+    """Create a .lnk shortcut via WScript.Shell (no pywin32 dependency needed)."""
+    lines = [
+        "$WshShell = New-Object -ComObject WScript.Shell",
+        f'$Shortcut = $WshShell.CreateShortcut("{shortcut_path}")',
+        f'$Shortcut.TargetPath = "{target_path}"',
+        f'$Shortcut.WorkingDirectory = "{working_directory}"',
+    ]
+    if icon_path:
+        lines.append(f'$Shortcut.IconLocation = "{icon_path}"')
+    if description:
+        lines.append(f'$Shortcut.Description = "{description}"')
+    lines.append("$Shortcut.Save()")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "; ".join(lines)],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0, (result.stderr or "").strip()
+
+
 def create_windows_launcher():
-    launcher_path = "start.bat"
-    if os.path.exists(launcher_path):
-        print(f"{GREEN}• Windows launcher is ready: {launcher_path}{RESET}")
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    launcher_path = os.path.join(project_root, "start.bat")
+    if not os.path.exists(launcher_path):
+        print(f"{YELLOW}• Windows launcher is missing: start.bat{RESET}")
+        return
+
+    if platform.system() != "Windows":
+        print(f"{GREEN}• Windows launcher is ready: start.bat{RESET}")
+        return
+
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.isdir(desktop):
+        print(f"{GREEN}• Windows launcher is ready: start.bat{RESET}")
+        return
+
+    shortcut_path = os.path.join(desktop, "Dotori.lnk")
+    # A branded .ico doesn't exist yet; if one is dropped in later at this
+    # path, shortcuts created from then on will pick it up automatically.
+    icon_path = os.path.join(project_root, "dotori.ico")
+    ok, error = _create_windows_shortcut(
+        shortcut_path,
+        launcher_path,
+        project_root,
+        icon_path=icon_path if os.path.exists(icon_path) else None,
+        description="Start Dotori",
+    )
+    if ok:
+        print(f"{GREEN}• Desktop shortcut created: {shortcut_path}{RESET}")
     else:
-        print(f"{YELLOW}• Windows launcher is missing: {launcher_path}{RESET}")
+        print(f"{YELLOW}• Windows launcher is ready: start.bat{RESET}")
+        print(f"{YELLOW}  (Could not create a desktop shortcut: {error or 'unknown error'}){RESET}")
 
 
 def handle_network_access_cli(args):
@@ -514,7 +580,8 @@ def _print_server_status_report(report):
 
 
 def handle_server_status_cli(json_output=False, skip_file_io=False, scope="production"):
-    print_header("Server Status")
+    if not json_output:
+        print_header("Server Status")
 
     docker_services = probe_docker_services()
     docker_status = {
@@ -601,8 +668,6 @@ def run_services(
 
     manager = RuntimeLifecycleManager()
 
-    # RAG workers are intentionally excluded from the initial plan. They are
-    # started only after a resolved runtime has passed lifecycle validation.
     initial_plan = build_deployment_plan(mode, scope="production")
     services = list(initial_plan.enabled_services)
     if initial_plan.disabled_worker_services:
@@ -686,7 +751,7 @@ def run_services(
 
         if initial_plan.mode == "rag" and not runtime_ready:
             print(
-                f"{YELLOW}[WARN] Dotori core and search services are healthy, but the "
+                f"{YELLOW}[WARN] Dotori core services are healthy, but the "
                 f"local LLM is unavailable. RAG answer generation remains disabled.{RESET}"
             )
             print(
@@ -696,18 +761,6 @@ def run_services(
                 f"{YELLOW}• Retry after freeing memory: "
                 f"python3 install.py --retry-llm{RESET}"
             )
-
-        runtime_workers = [
-            worker.compose_service
-            for worker in final_plan.enabled_workers
-            if worker.requires_runtime
-        ]
-        if runtime_workers:
-            worker_cmd = f"{COMPOSE_COMMAND} up --no-build -d " + " ".join(runtime_workers)
-            worker_ok, _stdout, worker_error = run_command(worker_cmd)
-            if not worker_ok:
-                print(f"{RED}[ERROR] Runtime is healthy, but the RAG worker failed to start: {worker_error}{RESET}")
-                return False
 
         print_header("Startup Complete")
         print(f"• {BOLD}Web application:{RESET} {GREEN}{APP_URL}{RESET}")
@@ -728,8 +781,26 @@ def run_services(
         return False
 
 
+def _ensure_embedding_internal_token():
+    # Backfill for installs whose .env predates EMBEDDING_INTERNAL_TOKEN, and
+    # for fresh installs whose copied .env still has the .env.example
+    # placeholder. Idempotent: never touches an already-generated token, so
+    # this is safe to call on every install.py run.
+    if not os.path.exists(ENV_FILE):
+        return
+    with open(ENV_FILE, "r", encoding="utf-8") as f:
+        content = f.read()
+    match = re.search(r"^EMBEDDING_INTERNAL_TOKEN=(.*)$", content, re.MULTILINE)
+    current = match.group(1).strip() if match else ""
+    if current and current != "change-me":
+        return
+    write_env_file(ENV_FILE, ENV_FILE, {"EMBEDDING_INTERNAL_TOKEN": secrets.token_urlsafe(32)})
+    print(f"{GREEN}• Generated EMBEDDING_INTERNAL_TOKEN for app <-> embedding-executor authentication.{RESET}")
+
+
 def _ensure_env_file_exists():
     if os.path.exists(ENV_FILE):
+        _ensure_embedding_internal_token()
         return
     if os.path.exists(ENV_TEMPLATE_FILE):
         shutil.copy(ENV_TEMPLATE_FILE, ENV_FILE)
@@ -743,8 +814,9 @@ def _ensure_env_file_exists():
         "DJANGO_SECRET_KEY": secrets.token_urlsafe(50),
         "POSTGRES_USER": "dotori",
         "POSTGRES_PASSWORD": secrets.token_urlsafe(24),
+        "EMBEDDING_INTERNAL_TOKEN": secrets.token_urlsafe(32),
     })
-    print(f"{GREEN}• Generated {ENV_FILE} with a random Django secret key and PostgreSQL password.{RESET}")
+    print(f"{GREEN}• Generated {ENV_FILE} with a random Django secret key, PostgreSQL password, and embedding service token.{RESET}")
 
 
 def handle_login_cli(mode, assume_yes=False):
@@ -775,10 +847,43 @@ def handle_accounts_cli(mode):
     return False
 
 
+def _check_database_chunks(compose_command, scope="production"):
+    """Check how many completed documents and chunks exist in the database."""
+    cmd = (
+        f"{compose_command} exec -T app python manage.py "
+        f"change_embedding_runtime --scope {scope} --check-chunks"
+    )
+    ok, stdout, _ = run_command(cmd)
+    if not ok or not stdout.strip() or "unrecognized arguments" in stdout:
+        cmd_run = (
+            f"{compose_command} run --rm -v ./app:/app app python manage.py "
+            f"change_embedding_runtime --scope {scope} --check-chunks"
+        )
+        ok, stdout, _ = run_command(cmd_run)
+    if ok and stdout.strip():
+        try:
+            for line in stdout.strip().splitlines():
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    data = json.loads(line)
+                    return int(data.get("documents", 0)), int(data.get("chunks", 0))
+        except Exception:
+            pass
+    return 0, 0
+
+
 def change_embedding_runtime_cli(
     *,
-    priority_preset="balanced",
+    priority_preset=None,
+    catalog_id=None,
+    candidate_generation_id=None,
+    external_url=None,
+    external_model=None,
+    external_key=None,
+    force_reembed=False,
+    skip_reembed=False,
     scope="production",
+    assume_yes=False,
 ):
     if _saved_operation_mode() == "3":
         print(
@@ -790,22 +895,267 @@ def change_embedding_runtime_cli(
     compose_command = f"docker compose -f {scope_cfg.compose_file}"
     print_header(f"Change Embedding Runtime ({scope})")
 
-    # Search intake is paused while the candidate corpus is built. The active
-    # pointer remains unchanged until the management command validates full
-    # coverage.
-    run_command(
-        f"{compose_command} stop embedding-worker search-worker"
+    active_runtime = load_active_embedding_runtime_summary(scope=scope)
+
+    if active_runtime:
+        print("Current Active Embedding Runtime:")
+        print(f"  • Model: {BOLD}{active_runtime.model_id}{RESET} (dim: {active_runtime.dimension}, provider: {active_runtime.provider})")
+        print(f"  • Generation: {active_runtime.generation_id}\n")
+
+    # Determine if interactive wizard should run
+    is_interactive = not (
+        catalog_id
+        or candidate_generation_id
+        or (external_url and external_model)
+        or priority_preset
     )
-    command = (
-        f"{compose_command} run --rm app python manage.py "
-        f"change_embedding_runtime --scope {scope} "
-        f"--preset {priority_preset} --activate"
+
+    candidate_model_name = ""
+    candidate_dim = 0
+    candidate_provider = ""
+
+    if is_interactive:
+        print("Select embedding source:")
+        print(f"{BOLD}[1] System Built-in Catalog Models (Local & Recommended){RESET}")
+        print(f"{BOLD}[2] External OpenAI-compatible Endpoint (Ollama, vLLM, OpenAI, etc.){RESET}")
+        print(f"{BOLD}[3] Cancel{RESET}")
+        source = input("Select an option (default: 1): ").strip() or "1"
+
+        if source == "1":
+            supported = load_host_embedding_catalog()
+            print("\nAvailable Catalog Models:")
+            for idx, item in enumerate(supported, 1):
+                rec = " [Recommended]" if item.id == "bge-m3-hybrid" else ""
+                print(f"{BOLD}[{idx}] {item.display_name}{RESET} ({item.dimension} dim, {item.provider}){rec}")
+                print(f"    - {item.description}")
+            print(f"{BOLD}[{len(supported) + 1}] Select by Preset (Speed / Balanced / Quality){RESET}")
+
+            choice = input(f"Select a model [1-{len(supported) + 1}] (default: 1): ").strip() or "1"
+            try:
+                choice_idx = int(choice)
+                if 1 <= choice_idx <= len(supported):
+                    selected_entry = supported[choice_idx - 1]
+                    catalog_id = selected_entry.id
+                    candidate_model_name = selected_entry.repo_id
+                    candidate_dim = selected_entry.dimension
+                    candidate_provider = selected_entry.provider
+                elif choice_idx == len(supported) + 1:
+                    print("\nSelect Preset:")
+                    print("[1] Speed")
+                    print("[2] Balanced")
+                    print("[3] Quality")
+                    p_sel = input("Select preset (default: 2): ").strip() or "2"
+                    priority_preset = {"1": "speed", "2": "balanced", "3": "quality"}.get(p_sel, "balanced")
+                else:
+                    print(f"{RED}[ERROR] Invalid selection.{RESET}")
+                    return False
+            except ValueError:
+                print(f"{RED}[ERROR] Invalid input.{RESET}")
+                return False
+
+        elif source == "2":
+            print("\nConfigure External OpenAI-compatible Embedding Endpoint:")
+            saved_env = read_env_file(ENV_FILE)
+            default_url = (
+                saved_env.get("OPENAI_EMBEDDING_BASE_URL")
+                or "http://host.docker.internal:11434"
+            )
+            raw_url = input(f"Endpoint URL (default: {default_url}): ").strip() or default_url
+            api_key = input("API Key (optional, press Enter to skip): ").strip()
+            model_name = input("Model Name (e.g. text-embedding-3-small, bge-m3, nomic-embed-text): ").strip()
+
+            if not model_name:
+                print(f"{RED}[ERROR] Model name is required.{RESET}")
+                return False
+
+            probe_url = raw_url
+            container_url = raw_url
+            if "localhost" in raw_url or "127.0.0.1" in raw_url:
+                print(f"\n{YELLOW}• Notice: Inside Docker containers, 'localhost' refers to the container itself.{RESET}")
+                container_url = re.sub(r"localhost|127\.0\.0\.1", "host.docker.internal", raw_url)
+                print(f"  Container configuration will use: {GREEN}{container_url}{RESET}")
+            elif "host.docker.internal" in raw_url:
+                # On Windows host OS, host.docker.internal often times out or does not route to loopback.
+                # Use 127.0.0.1 for host probe, while preserving host.docker.internal for container_url.
+                probe_url = re.sub(r"host\.docker\.internal", "127.0.0.1", raw_url)
+
+            print(f"\n• Probing endpoint {probe_url} with model '{model_name}'...")
+            probe_res = probe_openai_embedding_endpoint(
+                probe_url,
+                model_name,
+                api_key=api_key or None,
+            )
+            # If 127.0.0.1 probe failed, attempt raw_url in case host.docker.internal routes to another host
+            if not probe_res.ok and probe_url != raw_url:
+                probe_res = probe_openai_embedding_endpoint(
+                    raw_url,
+                    model_name,
+                    api_key=api_key or None,
+                )
+
+            if not probe_res.ok:
+                print(f"{RED}[ERROR] Probe failed: {probe_res.error_message}{RESET}")
+                return False
+
+            print(f"{GREEN}✓ Healthcheck passed (HTTP {probe_res.status_code}, {probe_res.elapsed_ms}ms){RESET}")
+            print(f"{GREEN}✓ Detected embedding dimension: {probe_res.dimension}{RESET}")
+            if not probe_res.store_supported:
+                print(f"{RED}[ERROR] {probe_res.error_message}{RESET}")
+                return False
+            print(f"{GREEN}✓ Store compatibility confirmed: {probe_res.store}{RESET}")
+
+            # Update .env
+            env_updates = {"OPENAI_EMBEDDING_BASE_URL": container_url}
+            if api_key:
+                env_updates["OPENAI_EMBEDDING_API_KEY"] = api_key
+            write_env_file(ENV_FILE, ENV_FILE, env_updates)
+
+            # Stage external candidate generation
+            ext_entry = build_external_embedding_entry(
+                model_name,
+                probe_res.dimension,
+                probe_res.store,
+            )
+            candidate_generation_id, _gen_dir = stage_external_embedding_generation(
+                scope,
+                ext_entry,
+            )
+            print(f"{GREEN}✓ Staged candidate generation: {candidate_generation_id}{RESET}\n")
+            candidate_model_name = model_name
+            candidate_dim = probe_res.dimension
+            candidate_provider = "openai_compatible"
+
+        else:
+            print(f"{YELLOW}• Embedding change cancelled by user.{RESET}")
+            return False
+
+    elif external_url and external_model:
+        # Non-interactive external probe
+        probe_url = external_url
+        container_url = external_url
+        if "localhost" in external_url or "127.0.0.1" in external_url:
+            container_url = re.sub(r"localhost|127\.0\.0\.1", "host.docker.internal", external_url)
+        elif "host.docker.internal" in external_url:
+            probe_url = re.sub(r"host\.docker\.internal", "127.0.0.1", external_url)
+
+        probe_res = probe_openai_embedding_endpoint(
+            probe_url,
+            external_model,
+            api_key=external_key or None,
+        )
+        if not probe_res.ok and probe_url != external_url:
+            probe_res = probe_openai_embedding_endpoint(
+                external_url,
+                external_model,
+                api_key=external_key or None,
+            )
+        if not probe_res.ok:
+            print(f"{RED}[ERROR] Probe failed: {probe_res.error_message}{RESET}")
+            return False
+        if not probe_res.store_supported:
+            print(f"{RED}[ERROR] {probe_res.error_message}{RESET}")
+            return False
+        env_updates = {"OPENAI_EMBEDDING_BASE_URL": container_url}
+        if external_key:
+            env_updates["OPENAI_EMBEDDING_API_KEY"] = external_key
+        write_env_file(ENV_FILE, ENV_FILE, env_updates)
+        ext_entry = build_external_embedding_entry(
+            external_model,
+            probe_res.dimension,
+            probe_res.store,
+        )
+        candidate_generation_id, _ = stage_external_embedding_generation(
+            scope,
+            ext_entry,
+        )
+        candidate_model_name = external_model
+        candidate_dim = probe_res.dimension
+        candidate_provider = "openai_compatible"
+
+    # Compare candidate with active runtime
+    if active_runtime and not force_reembed:
+        is_same = False
+        if candidate_generation_id:
+            is_same = (
+                active_runtime.model_id == candidate_model_name
+                and active_runtime.dimension == candidate_dim
+                and active_runtime.provider == candidate_provider
+            )
+        elif catalog_id:
+            is_same = active_runtime.catalog_id == catalog_id
+
+        if is_same:
+            if is_interactive and not assume_yes:
+                print(f"{YELLOW}• Selected model is already the active embedding runtime: {active_runtime.model_id}{RESET}")
+                re_conf = input("Force re-embed all documents with this model anyway? (y/N): ").strip().lower()
+                if re_conf in ("y", "yes"):
+                    force_reembed = True
+                else:
+                    print(f"{GREEN}• Active runtime preserved. Nothing to do.{RESET}")
+                    return True
+            else:
+                print(f"{GREEN}• Embedding runtime is already active: {active_runtime.model_id}{RESET}")
+                return True
+
+    # Check for existing documents in database
+    doc_count, chunk_count = _check_database_chunks(compose_command, scope=scope)
+    if chunk_count > 0:
+        print(f"\n{YELLOW}• Database check: Found {doc_count} document(s) ({chunk_count} chunks).{RESET}")
+        if candidate_model_name and active_runtime:
+            print(f"• Model changing from '{active_runtime.model_id}' ({active_runtime.dimension} dim) to '{candidate_model_name}' ({candidate_dim} dim).")
+        print("Existing documents must be re-embedded to remain searchable with the new model.")
+
+        if not assume_yes and not skip_reembed and not force_reembed:
+            confirm = input("\nDo you want to re-embed all existing documents now? (Y/n): ").strip().lower()
+            if confirm in ("", "y", "yes"):
+                force_reembed = True
+                skip_reembed = False
+            else:
+                print("\n[1] Cancel change (keep current active runtime)")
+                print("[2] Activate now without re-embedding (existing files will not match queries until re-embedded)")
+                opt = input("Select an option (default: 1): ").strip() or "1"
+                if opt != "2":
+                    print(f"{YELLOW}• Embedding runtime change cancelled. Active runtime preserved.{RESET}")
+                    return False
+                skip_reembed = True
+                force_reembed = False
+    else:
+        print(f"{GREEN}• Database check: No existing documents found. Activating runtime directly.{RESET}")
+        skip_reembed = False
+
+    # Stop the request and processing topology
+    print(f"\n• Pausing document processing pipeline...")
+    pause_ok, _pause_stdout, pause_error = run_command(
+        f"{compose_command} stop "
+        + " ".join(DOCUMENT_RUNTIME_RESTART_SERVICES)
     )
+    if not pause_ok:
+        run_command(
+            f"{compose_command} up --no-build -d "
+            + " ".join(DOCUMENT_RUNTIME_RESTART_SERVICES)
+        )
+        print(
+            f"{RED}[ERROR] Could not pause the embedding pipeline: "
+            f"{pause_error or 'unknown Docker Compose error'}{RESET}"
+        )
+        return False
+
+    command = embedding_runtime_change_command(
+        compose_command,
+        scope=scope,
+        priority_preset=priority_preset or "balanced",
+        catalog_id=catalog_id,
+        candidate_generation_id=candidate_generation_id,
+        force_reembed=force_reembed,
+        skip_reembed=skip_reembed,
+        activate=True,
+    )
+    print(f"Command: {BOLD}{command}{RESET}\n")
     ok = run_interactive_command(command)
 
     restart_ok, _stdout, restart_error = run_command(
         f"{compose_command} up --no-build -d --force-recreate "
-        "app embedding-worker search-worker"
+        + " ".join(DOCUMENT_RUNTIME_RESTART_SERVICES)
     )
     if not ok:
         print(
@@ -824,7 +1174,7 @@ def change_embedding_runtime_cli(
         if rollback_ok:
             run_command(
                 f"{compose_command} up --no-build -d --force-recreate "
-                "app embedding-worker search-worker"
+                + " ".join(DOCUMENT_RUNTIME_RESTART_SERVICES)
             )
             print(
                 f"{YELLOW}• Previous embedding generation restored after "
@@ -843,35 +1193,104 @@ def change_embedding_runtime_cli(
     return inspect_ok
 
 
+# Classifies every top-level action flag below for tooling that needs to
+# tell them apart -- e.g. a future tray app maps "operate" flags to always
+# -available quick actions, "setup" flags to a one-time wizard screen, and
+# "toggle" flags to a switch that can be flipped back and forth. This is a
+# read-only introspection aid; it does not change parsing or CLI behavior.
+COMMAND_CATEGORIES = {
+    "operate": {
+        "run",
+        "restart",
+        "rebuild",
+        "retry_llm",
+        "stop",
+        "shutdown",
+        "status",
+        "accounts",
+        "network_access_status",
+    },
+    "setup": {
+        "change_llm",
+        "change_embedding",
+        "remove_llm",
+        "network_access_create",
+        "network_access_open",
+    },
+    "toggle": {
+        "login",
+        "network_access_connect",
+        "network_access_disconnect",
+    },
+}
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Dotori installation and operations CLI")
-    parser.add_argument("--run", action="store_true", help="Start services using the saved configuration")
-    parser.add_argument("--restart", action="store_true", help="Pause and restart services")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild images and restart the active runtime")
-    parser.add_argument("--retry-llm", action="store_true", help="Retry starting the local LLM runtime")
-    parser.add_argument("--stop", action="store_true", help="Pause services (containers preserved)")
-    parser.add_argument("--shutdown", action="store_true", help="Fully remove containers and networks")
-    parser.add_argument("--status", action="store_true", help="Show server status")
-    parser.add_argument("--change-llm", action="store_true", help="Run the interactive LLM runtime selection wizard")
-    parser.add_argument("--change-embedding", action="store_true", help="Build and activate a verified embedding runtime generation")
-    parser.add_argument(
+
+    operate = parser.add_argument_group("operate", "Control an already-configured, already-running deployment")
+    operate.add_argument("--run", action="store_true", help="Start services using the saved configuration")
+    operate.add_argument("--restart", action="store_true", help="Pause and restart services")
+    operate.add_argument("--rebuild", action="store_true", help="Rebuild images and restart the active runtime")
+    operate.add_argument("--retry-llm", action="store_true", help="Retry starting the local LLM runtime")
+    operate.add_argument("--stop", action="store_true", help="Pause services (containers preserved)")
+    operate.add_argument("--shutdown", action="store_true", help="Fully remove containers and networks")
+    operate.add_argument("--status", action="store_true", help="Show server status")
+    operate.add_argument("--accounts", choices=["list"], help="Manage local accounts")
+
+    setup = parser.add_argument_group("setup", "Change persisted configuration; not needed on every run")
+    setup.add_argument("--change-llm", action="store_true", help="Run the interactive LLM runtime selection wizard")
+    setup.add_argument("--change-embedding", action="store_true", help="Build and activate a verified embedding runtime generation")
+    setup.add_argument(
         "--embedding-priority",
         choices=["speed", "balanced", "quality"],
-        default="balanced",
+        default=None,
         help="Server-wide embedding catalog preset used with --change-embedding",
     )
-    parser.add_argument("--remove-llm", action="store_true", help="Stop and remove the current LLM runtime")
-    parser.add_argument("--login", choices=["enable", "disable"], help="Require real sign-in, or return to no-login personal mode")
-    parser.add_argument("--accounts", choices=["list"], help="Manage local accounts")
+    setup.add_argument(
+        "--catalog-id",
+        default=None,
+        help="Catalog embedding model ID (e.g. bge-m3-hybrid, harrier-270m, openai-text-embedding-3-small)",
+    )
+    setup.add_argument(
+        "--external-url",
+        default=None,
+        help="External OpenAI-compatible embedding endpoint URL (e.g. http://host.docker.internal:11434)",
+    )
+    setup.add_argument(
+        "--external-model",
+        default=None,
+        help="External embedding model name (e.g. text-embedding-3-small, nomic-embed-text)",
+    )
+    setup.add_argument(
+        "--external-key",
+        default=None,
+        help="Optional API key for external embedding endpoint",
+    )
+    setup.add_argument(
+        "--skip-reembed",
+        action="store_true",
+        help="Skip re-embedding existing documents when activating the new embedding runtime",
+    )
+    setup.add_argument(
+        "--force-reembed",
+        action="store_true",
+        help="Force re-embedding of existing documents even if model is already active",
+    )
+    setup.add_argument("--remove-llm", action="store_true", help="Stop and remove the current LLM runtime")
 
-    parser.add_argument("--scope", choices=list(SCOPE_CONFIG), default="production", help="Runtime scope to target")
-    parser.add_argument("--json-output", action="store_true", help="Print machine-readable JSON output (--status, --network-access-status)")
-    parser.add_argument("--skip-file-io", action="store_true", help="Skip the file I/O pipeline check in --status")
-    parser.add_argument("--cluster-mode", action="store_true", help="Use cluster-mode detection with --change-llm")
-    parser.add_argument("--keep-weights", action="store_true", help="Keep cached model weights when switching runtimes")
-    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompts (--remove-llm, --login)")
+    toggle = parser.add_argument_group("toggle", "Flip a persisted setting on or off; can be changed repeatedly")
+    toggle.add_argument("--login", choices=["enable", "disable"], help="Require real sign-in, or return to no-login personal mode")
 
-    network = parser.add_argument_group("network access")
+    shared = parser.add_argument_group("shared options", "Modifiers for the flags above, not actions on their own")
+    shared.add_argument("--scope", choices=list(SCOPE_CONFIG), default="production", help="Runtime scope to target")
+    shared.add_argument("--json-output", action="store_true", help="Print machine-readable JSON output (--status, --network-access-status)")
+    shared.add_argument("--skip-file-io", action="store_true", help="Skip the file I/O pipeline check in --status")
+    shared.add_argument("--cluster-mode", action="store_true", help="Use cluster-mode detection with --change-llm")
+    shared.add_argument("--keep-weights", action="store_true", help="Keep cached model weights when switching runtimes")
+    shared.add_argument("--yes", action="store_true", help="Skip confirmation prompts (--remove-llm, --login)")
+
+    network = parser.add_argument_group("network access", "Setup (create/open) and toggle (connect/disconnect) actions for external access")
     network.add_argument("--network-access-create", action="store_true", help="Create external access configuration files")
     network.add_argument("--network-access-open", action="store_true", help="Open the external access configuration folder")
     network.add_argument("--network-access-connect", action="store_true", help="Connect the external access module")
@@ -887,7 +1306,7 @@ def handle_pause_cli(scope="production"):
     compose_command = f"docker compose -f {scope_cfg.compose_file}"
 
     ok, _stdout, stderr = run_command(
-        f"{compose_command} --profile direct-https --profile managed-rag stop"
+        f"{compose_command} --profile direct-https stop"
     )
     runtime_ok = RuntimeLifecycleManager().stop(scope, remove_container=False)
 
@@ -909,18 +1328,11 @@ def handle_shutdown_cli(scope="production"):
     compose_command = f"docker compose -f {scope_cfg.compose_file}"
 
     saved_plan = read_deployment_plan(scope)
-    planned_workers = []
-    if saved_plan:
-        planned_workers = [
-            worker.get("compose_service")
-            for worker in saved_plan.get("workers", [])
-            if worker.get("enabled") and worker.get("compose_service")
-        ]
-    worker_services = planned_workers or list(ALL_WORKER_SERVICES)
+    worker_services = worker_services_for_lifecycle(saved_plan)
     run_command(f"{compose_command} stop " + " ".join(worker_services))
     runtime_ok = RuntimeLifecycleManager().stop(scope, remove_container=True)
     ok, _stdout, stderr = run_command(
-        f"{compose_command} --profile direct-https --profile managed-rag down"
+        f"{compose_command} --profile direct-https down"
     )
 
     inspect_ok, count_out, _ = run_command(
@@ -959,7 +1371,14 @@ def main():
     if args.change_embedding:
         ok = change_embedding_runtime_cli(
             priority_preset=args.embedding_priority,
+            catalog_id=args.catalog_id,
+            external_url=args.external_url,
+            external_model=args.external_model,
+            external_key=args.external_key,
+            skip_reembed=args.skip_reembed,
+            force_reembed=args.force_reembed,
             scope=args.scope,
+            assume_yes=args.yes,
         )
         sys.exit(0 if ok else 1)
     if args.remove_llm:
@@ -1059,11 +1478,19 @@ def main():
     # Write configs to the installation environment file.
     write_env_file(ENV_FILE, ENV_FILE, updates)
     if mode in ("1", "2"):
-        embedding_entry = initialize_embedding_runtime_config(rag_priority)
-        print(
-            f"{GREEN}• Embedding runtime configured from catalog: "
-            f"{embedding_entry.display_name} ({embedding_entry.id}){RESET}"
-        )
+        print("\n" + "-" * 60)
+        print_header("Embedding Model Configuration")
+        print(f"{BOLD}[1] Default Recommended (BAAI BGE-M3 Hybrid, 1024 dim){RESET}")
+        print(f"{BOLD}[2] Custom Selection (Catalog Models or External Endpoint){RESET}")
+        emb_choice = input("Select embedding option (default: 1): ").strip() or "1"
+        if emb_choice == "2":
+            change_embedding_runtime_cli(scope="production")
+        else:
+            embedding_entry = initialize_embedding_runtime_config(rag_priority)
+            print(
+                f"{GREEN}• Embedding runtime configured from catalog: "
+                f"{embedding_entry.display_name} ({embedding_entry.id}){RESET}"
+            )
     
     # Auto-generate Windows bat launcher
     create_windows_launcher()

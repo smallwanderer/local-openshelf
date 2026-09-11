@@ -31,6 +31,7 @@ def get_server_rag_model_choices() -> list[str]:
 
 def upsert_llm_endpoint(
     *,
+    workspace,
     owner,
     name: str,
     endpoint_type: str,
@@ -48,9 +49,10 @@ def upsert_llm_endpoint(
         return None, False
 
     return LLMEndpoint.objects.update_or_create(
-        owner=owner,
+        workspace=workspace,
         name=name,
         defaults={
+            "owner": owner,
             "endpoint_type": endpoint_type,
             "base_url": base_url,
             "default_model": default_model,
@@ -60,18 +62,18 @@ def upsert_llm_endpoint(
     )
 
 
-def delete_llm_endpoint(*, owner, endpoint_id: str | None) -> int:
+def delete_llm_endpoint(*, workspace, endpoint_id: str | None) -> int:
     if not endpoint_id:
         return 0
-    deleted_count, _ = LLMEndpoint.objects.filter(id=endpoint_id, owner=owner).delete()
+    deleted_count, _ = LLMEndpoint.objects.filter(id=endpoint_id, workspace=workspace).delete()
     return deleted_count
 
 
-def check_llm_endpoint(*, owner, endpoint_id: str | None, timeout: int = 8) -> LLMEndpoint | None:
+def check_llm_endpoint(*, workspace, endpoint_id: str | None, timeout: int = 8) -> LLMEndpoint | None:
     if not endpoint_id:
         return None
 
-    endpoint = LLMEndpoint.objects.filter(id=endpoint_id, owner=owner).first()
+    endpoint = LLMEndpoint.objects.filter(id=endpoint_id, workspace=workspace).first()
     if endpoint is None:
         return None
 
@@ -125,18 +127,20 @@ def check_llm_endpoint(*, owner, endpoint_id: str | None, timeout: int = 8) -> L
     return endpoint
 
 
-def get_or_create_llm_preference(user) -> UserLLMPreference:
-    preference, _ = UserLLMPreference.objects.get_or_create(user=user)
+def get_or_create_llm_preference(workspace, *, owner=None) -> UserLLMPreference:
+    preference, _ = UserLLMPreference.objects.get_or_create(
+        workspace=workspace, defaults={"user": owner}
+    )
     return preference
 
 
-def set_user_rag_model(*, user, endpoint_id: str | None, rag_model: str) -> UserLLMPreference:
-    preference = get_or_create_llm_preference(user)
+def set_user_rag_model(*, workspace, owner=None, endpoint_id: str | None, rag_model: str) -> UserLLMPreference:
+    preference = get_or_create_llm_preference(workspace, owner=owner)
     endpoint = None
     if endpoint_id:
         endpoint = LLMEndpoint.objects.filter(
             id=endpoint_id,
-            owner=user,
+            workspace=workspace,
             is_active=True,
         ).first()
 
@@ -146,10 +150,10 @@ def set_user_rag_model(*, user, endpoint_id: str | None, rag_model: str) -> User
     return preference
 
 
-def get_user_llm_settings_context(user) -> dict:
-    preference = get_or_create_llm_preference(user)
+def get_user_llm_settings_context(workspace, *, owner=None) -> dict:
+    preference = get_or_create_llm_preference(workspace, owner=owner)
     return {
-        "llm_endpoints": user.llm_endpoints.all().order_by("name"),
+        "llm_endpoints": workspace.llm_endpoints.all().order_by("name"),
         "llm_preference": preference,
         "llm_endpoint_types": LLMEndpoint.ENDPOINT_TYPE_CHOICES,
         "server_rag_base_url": get_server_rag_base_url(),
@@ -159,9 +163,9 @@ def get_user_llm_settings_context(user) -> dict:
     }
 
 
-def build_rag_llm_snapshot(user) -> dict:
+def build_rag_llm_snapshot(workspace) -> dict:
     try:
-        preference = UserLLMPreference.objects.select_related("rag_endpoint").get(user=user)
+        preference = UserLLMPreference.objects.select_related("rag_endpoint").get(workspace=workspace)
     except UserLLMPreference.DoesNotExist:
         return get_cached_server_rag_target().as_snapshot()
 

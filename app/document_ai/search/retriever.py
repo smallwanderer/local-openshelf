@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any, Dict, List, Optional
 
 from django.conf import settings
+from django.db.models import Q
 
 from document_ai.embedding.store_registry import get_embedding_store_instance
 from document_ai.models import ChunkEmbedding, DocumentChunk
@@ -161,6 +162,9 @@ class VectorRetriever:
         self.evidence_context_window = int(
             getattr(settings, "EMBEDDING_EVIDENCE_CONTEXT_WINDOW", 1)
         )
+        # None preserves the compressor's server-default behavior. A workspace
+        # profile supplies an explicit boolean through tuning_params.
+        self.contextual_compression_enabled = None
 
     def _apply_tuning_params(self, params: Dict[str, Any]):
         """
@@ -179,6 +183,10 @@ class VectorRetriever:
         self.pool_tau = params.get("pool_tau", self.pool_tau)
         self.doc_length_penalty_alpha = params.get("doc_length_penalty_alpha", self.doc_length_penalty_alpha)
         self.evidence_context_window = params.get("evidence_context_window", self.evidence_context_window)
+        self.pooling_method = params.get("pooling_method", self.pooling_method)
+        compression = params.get("contextual_compression")
+        if isinstance(compression, dict) and isinstance(compression.get("enabled"), bool):
+            self.contextual_compression_enabled = compression["enabled"]
 
     def _pool_scores(self, scores: list[float]) -> float:
         if self.pooling_method in {"normalized_logsumexp", "normalized_softmax"}:
@@ -213,7 +221,7 @@ class VectorRetriever:
         return threshold
 
     def _hybrid_score(self, *, dense_score: float, sparse_score: float, query_sparse: dict[str, float]) -> float:
-        if not self.store.spec.supports_sparse or not query_sparse:
+        if not query_sparse:
             return dense_score
         return (
             self.hybrid_dense_weight * dense_score
@@ -252,24 +260,67 @@ class VectorRetriever:
 
         return checks
 
-    def _build_context_text(self, chunk) -> str:
+    def _load_context_chunks(self, evidence_chunks) -> dict[tuple[int, int], str]:
+        """Load every evidence window in one query.
+
+        Ranges are merged per parse result before building the query so nearby
+        evidences do not add redundant predicates. The returned map is keyed
+        by both document and chunk index; equal indexes from different
+        documents can therefore never be mixed while contexts are assembled.
+        """
+        if self.evidence_context_window <= 0:
+            return {}
+
+        ranges_by_parse_result: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for chunk in evidence_chunks:
+            start = max(chunk.chunk_index - self.evidence_context_window, 0)
+            end = chunk.chunk_index + self.evidence_context_window
+            ranges_by_parse_result[chunk.parse_result_id].append((start, end))
+
+        condition = Q()
+        for parse_result_id, ranges in ranges_by_parse_result.items():
+            merged_ranges: list[list[int]] = []
+            for start, end in sorted(ranges):
+                if not merged_ranges or start > merged_ranges[-1][1] + 1:
+                    merged_ranges.append([start, end])
+                else:
+                    merged_ranges[-1][1] = max(merged_ranges[-1][1], end)
+            for start, end in merged_ranges:
+                condition |= Q(
+                    parse_result_id=parse_result_id,
+                    chunk_index__gte=start,
+                    chunk_index__lte=end,
+                )
+
+        if not condition:
+            return {}
+
+        context_chunks = DocumentChunk.objects.filter(condition).order_by(
+            "parse_result_id", "chunk_index"
+        )
+        return {
+            (context_chunk.parse_result_id, context_chunk.chunk_index): normalize_extracted_text(
+                context_chunk.text or ""
+            )
+            for context_chunk in context_chunks
+        }
+
+    def _build_context_text(
+        self,
+        chunk,
+        context_by_chunk: dict[tuple[int, int], str],
+    ) -> str:
         if self.evidence_context_window <= 0:
             return normalize_extracted_text(chunk.text or "")
 
-        context_chunks = (
-            DocumentChunk.objects.filter(
-                parse_result_id=chunk.parse_result_id,
-                chunk_index__gte=max(chunk.chunk_index - self.evidence_context_window, 0),
-                chunk_index__lte=chunk.chunk_index + self.evidence_context_window,
-            )
-            .order_by("chunk_index")
-        )
-
         context_parts = [
-            normalize_extracted_text(context_chunk.text or "")
-            for context_chunk in context_chunks
-            if normalize_extracted_text(context_chunk.text or "")
+            context_by_chunk.get((chunk.parse_result_id, chunk_index), "")
+            for chunk_index in range(
+                max(chunk.chunk_index - self.evidence_context_window, 0),
+                chunk.chunk_index + self.evidence_context_window + 1,
+            )
         ]
+        context_parts = [part for part in context_parts if part]
 
         if not context_parts:
             return normalize_extracted_text(chunk.text or "")
@@ -283,6 +334,7 @@ class VectorRetriever:
         threshold: Optional[float] = None,
         node_ids: Optional[List[int]] = None,
         user=None,
+        workspace=None,
         tuning_params: Optional[Dict[str, Any]] = None,
         filter_kwargs: Optional[Dict[str, Any]] = None,
         exclude_kwargs: Optional[Dict[str, Any]] = None,
@@ -296,13 +348,27 @@ class VectorRetriever:
             for name, value in extra.items():
                 put_metric(metrics, name, value)
             put_metric(metrics, "retrieval_total_ms", elapsed_ms(retrieve_started))
+            logger.info(
+                "Vector retrieval timing: query_embedding_ms=%s, vector_query_ms=%s, "
+                "rerank_and_evidence_ms=%s, contextual_compression_ms=%s, "
+                "retrieval_total_ms=%s, candidate_count=%s, result_count=%s",
+                metrics.get("query_embedding_ms"),
+                metrics.get("vector_query_ms"),
+                metrics.get("rerank_and_evidence_ms"),
+                metrics.get("contextual_compression_ms"),
+                metrics.get("retrieval_total_ms"),
+                metrics.get("candidate_count"),
+                metrics.get("result_count"),
+            )
 
         # 튜닝 파라미터가 있으면 적용
         if tuning_params:
             self._apply_tuning_params(tuning_params)
         qs = self.store.base_queryset()
 
-        if user is not None:
+        if workspace is not None:
+            qs = qs.filter(chunk__parse_result__node__workspace=workspace)
+        elif user is not None:
             qs = qs.filter(chunk__parse_result__node__owner=user)
 
         if node_ids is not None:
@@ -336,13 +402,28 @@ class VectorRetriever:
         try:
             from document_ai.embedding.embeding_models import embed_query
 
+            logger.info(
+                "Query embedding started: model=%s, backend=%s, query_len=%s",
+                self.model_name,
+                query_backend,
+                len(query),
+            )
             embedding_started = perf_counter()
             query_embedding = embed_query(
                 query,
                 model_name=self.model_name,
                 backend=query_backend,
             )
-            put_metric(metrics, "query_embedding_ms", elapsed_ms(embedding_started))
+            query_embedding_ms = elapsed_ms(embedding_started)
+            put_metric(metrics, "query_embedding_ms", query_embedding_ms)
+            logger.info(
+                "Query embedding completed: model=%s, backend=%s, dense_dim=%s, sparse_terms=%s, elapsed_ms=%s",
+                self.model_name,
+                query_backend,
+                len(query_embedding.dense_vector),
+                len(query_embedding.sparse_vector),
+                query_embedding_ms,
+            )
         except Exception as exc:
             logger.error("Failed to embed query: %s", exc)
             raise
@@ -351,7 +432,12 @@ class VectorRetriever:
             query_embedding.sparse_vector or {},
             self.query_sparse_top_n,
         )
-        contextual_compressor = EmbeddingContextualCompressor()
+        compressor_options = (
+            {"enabled": self.contextual_compression_enabled}
+            if self.contextual_compression_enabled is not None
+            else {}
+        )
+        contextual_compressor = EmbeddingContextualCompressor(**compressor_options)
         query_dense_norm = _l2_norm(query_embedding.dense_vector)
         query_sparse_norm = _l2_norm(pruned_query_sparse.values())
 
@@ -421,7 +507,8 @@ class VectorRetriever:
                 sparse_score=sparse_score,
                 query_sparse=pruned_query_sparse,
             )
-            candidate_dense_norm = _l2_norm(getattr(emb, "vector", None))
+            dense_field_name = getattr(self.store.spec, "dense_field", "vector")
+            candidate_dense_norm = _l2_norm(getattr(emb, dense_field_name, None))
             score_checks = self._score_checks(
                 query_dense_norm=query_dense_norm,
                 candidate_dense_norm=candidate_dense_norm,
@@ -464,6 +551,17 @@ class VectorRetriever:
 
         retrieved_data = []
         compression_ms = 0.0
+
+        all_evidence_chunks = [
+            item["embedding"].chunk
+            for hits in node_groups.values()
+            for item in sorted(
+                hits,
+                key=lambda candidate: candidate["hybrid_score"],
+                reverse=True,
+            )[: self.evidence_top_k]
+        ]
+        context_by_chunk = self._load_context_chunks(all_evidence_chunks)
         
         # node별로 묶은 dense candidate들을 가지고 hybrid pooling을 수행합니다.
         for uid, hits in node_groups.items():
@@ -508,7 +606,7 @@ class VectorRetriever:
                     "chunk_id": chunk.id,
                     "_chunk": chunk,
                     "text": normalize_extracted_text(chunk.text or ""),
-                    "context_text": self._build_context_text(chunk),
+                    "context_text": self._build_context_text(chunk, context_by_chunk),
                     "section": chunk.section_title or "",
                     "pages": (
                         f"{chunk.page_from}-{chunk.page_to}"

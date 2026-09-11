@@ -1,0 +1,15 @@
+{
+  "id": "openai-text-embedding-3-small",
+  "model_id": "openai-text-embedding-3-small",
+  "provider": "openai_compatible",
+  "store": "pgvector_chunk_1536",
+  "dimension": 1536,
+  "supports_sparse": false,
+  "normalize_embeddings": true,
+  "distance_strategy": "inner_product",
+  "query_prefix": "",
+  "document_prefix": "",
+  "availability": "supported",
+  "priority": 60,
+  "presets": []
+}

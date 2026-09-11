@@ -28,11 +28,13 @@ class EmbeddingRuntimeSnapshot(BaseModel):
     provider: str
     store: str
     dimension: int = Field(gt=0)
+    max_tokens: int = Field(default=8192, gt=0)
     supports_sparse: bool
     normalize_embeddings: bool = True
     distance_strategy: str
     query_prefix: str = ""
     document_prefix: str = ""
+    languages: list[str] = Field(default_factory=list)
     runtime_fingerprint: str = ""
     resolved_at: str | None = None
 
@@ -44,7 +46,15 @@ class EmbeddingRuntimeSnapshot(BaseModel):
         )
         expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if self.runtime_fingerprint and self.runtime_fingerprint != expected:
-            raise ValueError("Embedding runtime fingerprint does not match payload.")
+            # Backward compatibility check for v1 payloads generated without max_tokens
+            legacy_payload = {k: v for k, v in payload.items() if k != "max_tokens"}
+            legacy_canonical = json.dumps(
+                legacy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            legacy_expected = hashlib.sha256(legacy_canonical.encode("utf-8")).hexdigest()
+            if self.runtime_fingerprint != legacy_expected:
+                raise ValueError("Embedding runtime fingerprint does not match payload.")
+            expected = self.runtime_fingerprint
         self.runtime_fingerprint = expected
         return self
 
@@ -69,6 +79,9 @@ def get_embedding_runtime_config_path(
 
 def _legacy_runtime_snapshot(scope: str) -> EmbeddingRuntimeSnapshot:
     """Provide the pre-runtime-file BGE default without env configurability."""
+    from django.conf import settings
+
+    legacy_max_tokens = int(getattr(settings, "EMBEDDING_MAX_TOKENS", 1280) or 1280)
     return EmbeddingRuntimeSnapshot(
         scope=scope,
         catalog_id="legacy-env",
@@ -76,13 +89,15 @@ def _legacy_runtime_snapshot(scope: str) -> EmbeddingRuntimeSnapshot:
         generation_id="legacy-bge-m3",
         model_id="BAAI/bge-m3",
         model_revision="legacy",
-        tokenizer_id="BAAI/bge-m3",
-        tokenizer_revision="legacy",
+        tokenizer_id=getattr(settings, "PARSER_TOKENIZER_ID", "BAAI/bge-m3"),
+        tokenizer_revision=getattr(settings, "PARSER_TOKENIZER_REVISION", "legacy"),
         provider="bgem3_hybrid",
         store="pgvector_chunk_1024",
         dimension=1024,
+        max_tokens=legacy_max_tokens,
         supports_sparse=True,
         distance_strategy="inner_product",
+        languages=["multilingual"],
     )
 
 
@@ -116,3 +131,9 @@ def get_active_embedding_runtime(
 
 def clear_embedding_runtime_cache() -> None:
     get_active_embedding_runtime.cache_clear()
+    try:
+        from document_ai.parsers.config import clear_parser_tokenizer_cache
+
+        clear_parser_tokenizer_cache()
+    except Exception:
+        pass

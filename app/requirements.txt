@@ -1,5 +1,6 @@
 # Full local dependency set. The release app and worker services share one
-# image with web + AI dependencies. Development/test builds add dev packages.
+# image with web + AI dependencies. Test builds add test packages.
 -r requirements.web.txt
 -r requirements.ai.txt
--r requirements.dev.txt
+-r requirements.parser-docling.txt
+-r requirements.test.txt

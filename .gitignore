@@ -25,6 +25,12 @@ staticfiles/
 # Docker volume / runtime data
 data/
 
+# Web
+web/node_modules/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+
 # Celery runtime
 celerybeat-schedule
 celerybeat-schedule.*
@@ -72,5 +78,3 @@ legal/
 
 # Devs
 dev-docs/
-docker-compose.dev.yml
-app/requirements.dev.txt

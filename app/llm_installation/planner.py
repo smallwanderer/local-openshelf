@@ -229,6 +229,10 @@ class ServingPlan:
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        # ``concurrency`` is the preset- and memory-derived calibration
+        # ceiling at this planning stage.  ServerRAGTarget normalizes it into
+        # a separate initial operating value before persistence.
+        payload["safe_concurrency_ceiling"] = self.concurrency
         payload["required_vram_per_gpu_mb"] = list(
             self.required_vram_per_gpu_mb
         )

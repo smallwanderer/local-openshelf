@@ -1,0 +1,17 @@
+{
+  "id": "gte-qwen2-1.5b",
+  "display_name": "GTE-Qwen2-1.5B-Instruct",
+  "description": "Alibaba Qwen2 based instruction-tuned multilingual text embedding model.",
+  "license": "apache-2.0",
+  "repo_id": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+  "revision": "main000",
+  "tokenizer_id": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+  "tokenizer_revision": "main000",
+  "dimension": 1536,
+  "model_input_max_tokens": 8192,
+  "languages": ["ko", "en", "zh", "ja", "multilingual"],
+  "footprint": {
+    "parameter_count_m": 1540,
+    "peak_activation_mb": 0
+  }
+}

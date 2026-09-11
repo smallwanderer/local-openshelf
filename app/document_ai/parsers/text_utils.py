@@ -99,6 +99,178 @@ def wrap_text_as_markdown(text: str, document_name: str) -> str:
     return f"# Document: {Path(document_name).name}\n\n{text}"
 
 
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def _fence_run(line: str) -> Optional[tuple[str, int, str]]:
+    """Return a Markdown fence character, run length, and trailing text.
+
+    CommonMark allows up to three leading spaces and requires at least three
+    matching backticks or tildes. A backtick fence's info string cannot itself
+    contain a backtick.
+    """
+    leading_spaces = len(line) - len(line.lstrip(" "))
+    if leading_spaces > 3:
+        return None
+
+    stripped = line[leading_spaces:]
+    if not stripped or stripped[0] not in {"`", "~"}:
+        return None
+
+    fence_char = stripped[0]
+    run_length = 0
+    while run_length < len(stripped) and stripped[run_length] == fence_char:
+        run_length += 1
+    if run_length < 3:
+        return None
+
+    trailing = stripped[run_length:]
+    if fence_char == "`" and "`" in trailing:
+        return None
+    return fence_char, run_length, trailing
+
+
+def _is_escaped_backtick(text: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _normalize_code_span_content(content: str) -> str:
+    normalized = content.replace("\n", " ")
+    if (
+        len(normalized) >= 2
+        and normalized.startswith(" ")
+        and normalized.endswith(" ")
+        and normalized.strip(" ")
+    ):
+        normalized = normalized[1:-1]
+    return normalized
+
+
+def _escape_inline_code_content(content: str) -> str:
+    """Protect code text from Docling's Markdown table parser.
+
+    Backticks are encoded so a literal shorter backtick run inside a longer
+    code-span delimiter cannot be interpreted as another CodeSpan. Pipes use
+    an HTML entity so unwrapping a span cannot introduce a new table-cell
+    boundary. Docling leaves that entity serialized, so
+    ``normalize_extracted_text()`` restores it after chunk contextualization.
+    """
+    return (
+        _normalize_code_span_content(content)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("|", "&#124;")
+        .replace("`", "&#96;")
+    )
+
+
+def _restore_protected_table_entities(text: str) -> str:
+    """Restore entities that Dotori introduced only for Docling table input."""
+    if not isinstance(text, str):
+        return ""
+    return text.replace("&#124;", "|")
+
+
+def _unwrap_inline_code_spans(text: str) -> str:
+    """Unwrap valid Markdown code spans while preserving their literal text."""
+    parts: List[str] = []
+    cursor = 0
+
+    while cursor < len(text):
+        if text[cursor] != "`" or _is_escaped_backtick(text, cursor):
+            parts.append(text[cursor])
+            cursor += 1
+            continue
+
+        opener_start = cursor
+        while cursor < len(text) and text[cursor] == "`":
+            cursor += 1
+        delimiter_length = cursor - opener_start
+
+        search_at = cursor
+        closer_start = None
+        closer_end = None
+        while search_at < len(text):
+            candidate = text.find("`", search_at)
+            if candidate < 0:
+                break
+            if _is_escaped_backtick(text, candidate):
+                search_at = candidate + 1
+                continue
+
+            candidate_end = candidate
+            while candidate_end < len(text) and text[candidate_end] == "`":
+                candidate_end += 1
+            if candidate_end - candidate == delimiter_length:
+                closer_start = candidate
+                closer_end = candidate_end
+                break
+            search_at = candidate_end
+
+        if closer_start is None or closer_end is None:
+            parts.append(text[opener_start:cursor])
+            continue
+
+        parts.append(_escape_inline_code_content(text[cursor:closer_start]))
+        cursor = closer_end
+
+    return "".join(parts)
+
+
+def strip_inline_code_in_table_rows(markdown_text: str) -> str:
+    """docling's markdown table parser promotes any inline code span
+    (`` `text` ``) inside a table cell out of the table entirely, leaving an
+    empty cell behind and splitting the remaining columns into orphan
+    single-column tables. There's no markdown table syntax that keeps a code
+    span inline in a way docling respects, so this strips backticks from
+    table rows only -- HTML-escaping `<`/`>` in the unwrapped text so it
+    isn't swallowed as an HTML tag -- before the markdown reaches docling.
+    Inline code in prose and inside fenced code blocks is left untouched. Code
+    spans using longer delimiters are supported, including a double-backtick
+    span that contains a literal single backtick.
+
+    Root cause (docling/backend/md_backend.py, marko AST walk): the
+    `RawText` handler checks `self.in_table` and appends to the open table
+    buffer when inside one. The `CodeSpan` handler (backtick spans) does not
+    check that flag at all -- it unconditionally calls `self._close_table()`
+    and emits the span as a standalone `doc.add_code(...)` block. Since
+    `_close_table()` resets `in_table = False`, every backtick inside a
+    table row force-flushes the table at that point; a row with N code
+    spans is split into N+1 orphan table fragments with columns shifted out
+    of alignment. This is a gap in docling's CodeSpan handling, not
+    something fixable from a serializer or chunker config on our side, so
+    the workaround has to happen before docling ever sees the text.
+    """
+    lines = markdown_text.split("\n")
+    active_fence: Optional[tuple[str, int]] = None
+    for index, line in enumerate(lines):
+        fence = _fence_run(line)
+        if active_fence is None and fence is not None:
+            fence_char, fence_length, _ = fence
+            active_fence = (fence_char, fence_length)
+            continue
+        if active_fence is not None:
+            if fence is not None:
+                fence_char, fence_length, trailing = fence
+                if (
+                    fence_char == active_fence[0]
+                    and fence_length >= active_fence[1]
+                    and not trailing.strip()
+                ):
+                    active_fence = None
+            continue
+        if "`" not in line or not _TABLE_ROW_RE.match(line):
+            continue
+        lines[index] = _unwrap_inline_code_spans(line)
+    return "\n".join(lines)
+
+
 def normalize_extracted_text(text: str) -> str:
     if not isinstance(text, str):
         return ""

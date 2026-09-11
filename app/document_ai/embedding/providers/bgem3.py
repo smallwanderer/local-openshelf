@@ -9,21 +9,38 @@ from document_ai.parsers.config import get_embedding_max_tokens
 
 from .base import EmbeddingProviderSpec, EmbeddingResult
 
-try:
-    import torch
-except ImportError:  # pragma: no cover - exercised only when torch is unavailable
-    torch = None
-
 logger = logging.getLogger(__name__)
 
 _MODEL_CACHE: Dict[str, Any] = {}
-if torch is not None:
-    _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-else:
-    _DEVICE = None
+
+# torch (~500MB RSS just to import) is deferred to first actual use instead of
+# module import time. Only the process that owns the model (embedding-executor's
+# gunicorn worker, gated by DOTORI_EMBEDDING_MODEL_PROCESS) ever calls
+# get_bgem3_model()/_embed(); every other process that merely imports this
+# module for validate_text()/normalize_sparse_vector() etc. must not pay for
+# torch it will never use.
+_torch_module = None
+_torch_import_attempted = False
+_DEVICE = None
+
+
+def _ensure_torch():
+    global _torch_module, _torch_import_attempted, _DEVICE
+    if _torch_import_attempted:
+        return _torch_module
+    _torch_import_attempted = True
+    try:
+        import torch as torch_module
+    except ImportError:  # pragma: no cover - exercised only when torch is unavailable
+        _torch_module = None
+    else:
+        _torch_module = torch_module
+        _DEVICE = torch_module.device("cuda" if torch_module.cuda.is_available() else "cpu")
+    return _torch_module
 
 
 def clear_cuda_cache() -> None:
+    torch = _ensure_torch()
     if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
         torch.cuda.empty_cache()
         if torch.cuda.is_available():
@@ -34,6 +51,7 @@ def get_bgem3_model(model_name: str, model_revision: str = ""):
     cache_key = f"{model_name}@{model_revision or 'default'}"
     model = _MODEL_CACHE.get(cache_key)
     if model is None:
+        _ensure_torch()
         try:
             from FlagEmbedding import BGEM3FlagModel
         except ImportError as exc:
@@ -154,6 +172,10 @@ class BGEM3HybridProvider:
     def embed_query(self, text: str, *, max_length: int | None = None) -> EmbeddingResult:
         return self._embed(f"{self.spec.query_prefix}{text}", max_length=max_length)
 
+    def embed_documents(self, texts: list[str], *, max_length: int | None = None) -> list[EmbeddingResult]:
+        prefixed_texts = [f"{self.spec.document_prefix}{text}" for text in texts]
+        return self._embed_batch(prefixed_texts, max_length=max_length)
+
     def healthcheck(self) -> dict:
         result = self.embed_query("embedding healthcheck", max_length=32)
         return {
@@ -170,6 +192,9 @@ class BGEM3HybridProvider:
             self.spec.model_name,
             self.spec.model_revision,
         )
+        # get_bgem3_model() already resolved torch/_DEVICE above; this just
+        # gets the cached reference for the except/finally blocks below.
+        torch = _ensure_torch()
 
         try:
             output = model.encode(
@@ -209,6 +234,74 @@ class BGEM3HybridProvider:
                 raise RuntimeError(
                     "GPU OOM while embedding text "
                     f"(model={self.spec.model_name}, backend={self.spec.backend}, max_length={resolved_max_length})"
+                ) from exc
+            raise
+        finally:
+            gc.collect()
+            if torch is not None and _DEVICE is not None and _DEVICE.type == "cuda":
+                torch.cuda.empty_cache()
+
+    def _embed_batch(self, texts: list[str], *, max_length: int | None = None) -> list[EmbeddingResult]:
+        # One model.encode() call for N texts instead of N separate calls --
+        # amortizes tokenization/kernel-launch overhead across a document's
+        # chunks. Query embedding never goes through this path (latency
+        # sensitive, always single); only document micro-batching uses it.
+        normalized_texts = [validate_text(text) for text in texts]
+        resolved_max_length = max_length or get_embedding_max_tokens()
+        model = get_bgem3_model(
+            self.spec.model_name,
+            self.spec.model_revision,
+        )
+        torch = _ensure_torch()
+
+        try:
+            output = model.encode(
+                normalized_texts,
+                batch_size=len(normalized_texts),
+                max_length=resolved_max_length,
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
+
+            dense_rows = output["dense_vecs"]
+            if hasattr(dense_rows, "tolist"):
+                dense_rows = dense_rows.tolist()
+            lexical_weights = output.get("lexical_weights") or []
+
+            results: list[EmbeddingResult] = []
+            for index in range(len(normalized_texts)):
+                dense_vector = coerce_dense_vector(dense_rows[index])
+                sparse_vector = coerce_sparse_vector(
+                    lexical_weights[index] if index < len(lexical_weights) else {}
+                )
+                results.append(
+                    EmbeddingResult(
+                        dense_vector=dense_vector,
+                        sparse_vector=sparse_vector,
+                        model_name=self.spec.model_name,
+                        backend=self.spec.backend,
+                        dimension=len(dense_vector),
+                    )
+                )
+            return results
+
+        except Exception as exc:
+            if torch is not None and isinstance(exc, torch.cuda.OutOfMemoryError):
+                logger.exception(
+                    "CUDA OOM during batch embedding. model=%s, backend=%s, max_length=%s, batch_size=%s, device=%s",
+                    self.spec.model_name,
+                    self.spec.backend,
+                    resolved_max_length,
+                    len(normalized_texts),
+                    _DEVICE,
+                )
+                clear_cuda_cache()
+                gc.collect()
+                raise RuntimeError(
+                    "GPU OOM while embedding batch "
+                    f"(model={self.spec.model_name}, backend={self.spec.backend}, "
+                    f"max_length={resolved_max_length}, batch_size={len(normalized_texts)})"
                 ) from exc
             raise
         finally:

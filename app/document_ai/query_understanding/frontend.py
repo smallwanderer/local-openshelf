@@ -36,13 +36,14 @@ def _warnings_from_result(result: dict) -> list[dict[str, str]]:
     ]
 
 
-def _create_query_log(*, owner, raw_query: str, mode: str, result: dict, error_message: str = ""):
+def _create_query_log(*, owner, workspace=None, raw_query: str, mode: str, result: dict, error_message: str = ""):
     if owner is None or not getattr(owner, "is_authenticated", False):
         return None
 
     classification = result.get("classification") or {}
     return QueryUnderstandingLog.objects.create(
         owner=owner,
+        workspace=workspace,
         mode=mode,
         raw_query=raw_query or "",
         normalized_query=result.get("normalized_query") or "",
@@ -87,7 +88,7 @@ def _plan_from_result(raw_query: str, *, mode: str, result: dict, query_log=None
     )
 
 
-def _passthrough_plan(raw_query: str, *, mode: str, owner=None, source: str = "passthrough", warning: dict | None = None):
+def _passthrough_plan(raw_query: str, *, mode: str, owner=None, workspace=None, source: str = "passthrough", warning: dict | None = None, skip_log: bool = False):
     normalized_query = normalize_extracted_text(raw_query or "").strip()
     result = {
         "status": "fallback" if warning else "success",
@@ -112,47 +113,50 @@ def _passthrough_plan(raw_query: str, *, mode: str, owner=None, source: str = "p
         "dsl": {"semantic_query": normalized_query, "filters": [], "sorts": [], "target_scopes": []},
         "orm": {"filter_kwargs": {}, "exclude_kwargs": {}, "order_by": []},
     }
-    query_log = _create_query_log(owner=owner, raw_query=raw_query, mode=mode, result=result)
+    query_log = None if skip_log else _create_query_log(owner=owner, workspace=workspace, raw_query=raw_query, mode=mode, result=result)
     return _plan_from_result(raw_query, mode=mode, result=result, query_log=query_log)
 
 
-def prepare_retrieval_query(raw_query: str, *, mode: str = "search", owner=None) -> RetrievalQueryPlan:
+def prepare_retrieval_query(raw_query: str, *, mode: str = "search", owner=None, workspace=None) -> RetrievalQueryPlan:
     """
     Query-understanding boundary before vector retrieval.
 
-    The current in-process implementation calls the Celery task function
-    directly for compatibility. This module is the boundary to replace with a
-    remote query-understanding service when the deployment profile enables it.
+    The current in-process implementation calls the owning parser service
+    directly. This module is the boundary to replace with a remote
+    query-understanding service when the deployment profile enables it.
     """
     normalized_query = normalize_extracted_text(raw_query or "").strip()
     frontend_mode = os.getenv("QUERY_UNDERSTANDING_FRONTEND_MODE", "passthrough").strip().lower()
 
     if not normalized_query:
-        return _passthrough_plan(raw_query, mode=mode, owner=owner, source="empty_query")
+        return _passthrough_plan(raw_query, mode=mode, owner=owner, workspace=workspace, source="empty_query")
 
     if frontend_mode in {"passthrough", "off", "disabled"}:
         return _passthrough_plan(
             raw_query,
             mode=mode,
             owner=owner,
+            workspace=workspace,
             source="llm_query_frontend_disabled",
             warning={
                 "code": "llm_query_frontend_disabled",
                 "message": "QUERY_UNDERSTANDING_FRONTEND_MODE disabled LLM query understanding.",
             },
+            skip_log=True,
         )
 
     try:
-        from document_ai.tasks import parse_user_query
+        from document_ai.query_understanding.parser_service import parse_user_query_sync
 
-        result = parse_user_query(normalized_query, mode)
-        query_log = _create_query_log(owner=owner, raw_query=raw_query, mode=mode, result=result)
+        result = parse_user_query_sync(normalized_query, mode)
+        query_log = _create_query_log(owner=owner, workspace=workspace, raw_query=raw_query, mode=mode, result=result)
         return _plan_from_result(raw_query, mode=mode, result=result, query_log=query_log)
     except Exception as exc:
         return _passthrough_plan(
             raw_query,
             mode=mode,
             owner=owner,
+            workspace=workspace,
             source="llm_query_frontend_failed",
             warning={
                 "code": "llm_query_frontend_failed",

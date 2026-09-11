@@ -1,9 +1,9 @@
-docling==2.113.0
-torch==2.13.0
-torchvision==0.28.0
+# docling(parser)은 requirements.parser-docling.txt로 분리됨.
+-r requirements.torch.txt
 
 sentence-transformers==5.6.0
 FlagEmbedding==1.4.0
+kiwipiepy>=0.20.0
 
 python-hwpx==2.29.1
 pyhwp==0.1b15

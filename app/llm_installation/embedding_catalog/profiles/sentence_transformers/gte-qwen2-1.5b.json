@@ -1,0 +1,15 @@
+{
+  "id": "gte-qwen2-1.5b",
+  "model_id": "gte-qwen2-1.5b",
+  "provider": "sentence_transformers",
+  "store": "pgvector_chunk_1536",
+  "dimension": 1536,
+  "supports_sparse": false,
+  "normalize_embeddings": true,
+  "distance_strategy": "inner_product",
+  "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+  "document_prefix": "",
+  "availability": "supported",
+  "priority": 75,
+  "presets": []
+}

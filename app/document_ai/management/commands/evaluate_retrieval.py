@@ -1,33 +1,14 @@
 import json
-import math
-from collections import defaultdict
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from config.enums import AIStatus
-from document_ai.embedding.embeding_models import (
-    EmbeddingResult,
-    embed_document,
-    embed_query,
-)
+from document_ai.embedding.embeding_models import embed_document, embed_query
 from document_ai.models import DocumentChunk
 from document_ai.parsers.config import get_embedding_backend, get_embedding_model
-
-
-def _dense_similarity(left: list[float], right: list[float]) -> float:
-    return sum(a * b for a, b in zip(left, right))
-
-
-def _sparse_similarity(left: dict[str, float], right: dict[str, float]) -> float:
-    if not left or not right:
-        return 0.0
-
-    if len(left) > len(right):
-        left, right = right, left
-
-    return sum(value * right.get(key, 0.0) for key, value in left.items())
+from document_ai.search.evaluation import rank_documents as _rank_documents
 
 
 def _load_dataset(dataset_path: str) -> list[dict]:
@@ -45,52 +26,6 @@ def _load_dataset(dataset_path: str) -> list[dict]:
             raise CommandError(f"Dataset item #{index} needs a non-empty 'expected_node_ids' list.")
 
     return raw
-
-
-def _rank_documents(
-    query_embedding: EmbeddingResult,
-    chunk_records: list[dict],
-    chunk_embeddings: list[EmbeddingResult],
-    top_k: int,
-    dense_weight: float,
-    sparse_weight: float,
-) -> list[dict]:
-    chunk_hits = []
-    for record, embedding in zip(chunk_records, chunk_embeddings):
-        dense_score = _dense_similarity(query_embedding.dense_vector, embedding.dense_vector)
-        sparse_score = _sparse_similarity(query_embedding.sparse_vector, embedding.sparse_vector)
-        hybrid_score = (dense_weight * dense_score) + (sparse_weight * sparse_score)
-        chunk_hits.append(
-            {
-                "node_id": record["node_id"],
-                "node_name": record["node_name"],
-                "hybrid_score": hybrid_score,
-            }
-        )
-
-    chunk_hits.sort(key=lambda item: item["hybrid_score"], reverse=True)
-    chunk_hits = chunk_hits[:top_k]
-
-    grouped_hits = defaultdict(list)
-    for hit in chunk_hits:
-        grouped_hits[hit["node_id"]].append(hit)
-
-    documents = []
-    for node_id, hits in grouped_hits.items():
-        hits.sort(key=lambda item: item["hybrid_score"], reverse=True)
-        top_hits = hits[:3]
-        combined_score = sum(max(item["hybrid_score"], 0.0) for item in top_hits)
-        doc_score = math.log10(1.0 + combined_score)
-        documents.append(
-            {
-                "node_id": node_id,
-                "node_name": top_hits[0]["node_name"],
-                "doc_score": doc_score,
-            }
-        )
-
-    documents.sort(key=lambda item: item["doc_score"], reverse=True)
-    return documents
 
 
 class Command(BaseCommand):

@@ -20,6 +20,16 @@ class FileLanguage(models.TextChoices):
     OTHER = "other", "Other"
 
 
+class FileOperation(models.TextChoices):
+    UPLOAD = "upload", "Upload"
+    RENAME = "rename", "Rename"
+    MOVE = "move", "Move"
+    DELETE = "delete", "Delete"
+    RESTORE = "restore", "Restore"
+    PERMANENT_DELETE = "permanent_delete", "Permanent delete"
+    EMPTY_TRASH = "empty_trash", "Empty trash"
+
+
 class AIStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     PROCESSING = "processing", "Processing"

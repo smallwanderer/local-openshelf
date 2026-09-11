@@ -12,7 +12,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--scope",
-            choices=("production", "development"),
+            choices=("production",),
             default=None,
         )
         parser.add_argument("--json", action="store_true", dest="as_json")

@@ -1,0 +1,15 @@
+{
+  "id": "harrier-270m",
+  "model_id": "harrier-oss-v1-270m",
+  "provider": "sentence_transformers",
+  "store": "pgvector_chunk_640",
+  "dimension": 640,
+  "supports_sparse": false,
+  "normalize_embeddings": true,
+  "distance_strategy": "inner_product",
+  "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+  "document_prefix": "",
+  "availability": "supported",
+  "priority": 80,
+  "presets": []
+}

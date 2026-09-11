@@ -45,6 +45,8 @@
   "ragIntro": "Ask a question to find relevant documents first, then generate a grounded answer.",
   "questionPlaceholder": "Ask a question about your documents",
   "send": "Send",
+  "stop": "Stop generating",
+  "generationStopped": "Generation stopped.",
   "evidenceDocuments": "Evidence documents",
   "sourcesIntro": "Search evidence will appear here after you ask a question.",
   "searchStarted": "Search job started.",
