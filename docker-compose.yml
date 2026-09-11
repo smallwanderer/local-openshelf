@@ -44,11 +44,9 @@ services:
       retries: 10
 
   app:
-    # app never loads BGE-M3/docling (embedding-executor's model process does,
-    # exclusively — see RemoteBGEM3Provider). Its own image skips
+    # Its own image skips:
     # requirements.ai.txt (torch, FlagEmbedding, sentence-transformers) and
-    # requirements.parser-docling.txt (docling, torchvision, tesseract-ocr),
-    # so rebuilds are fast and don't pull multi-GB AI wheels.
+    # requirements.parser-docling.txt (docling, torchvision, tesseract-ocr)
     image: dotori-app-web:local
     build:
       context: .
@@ -133,18 +131,23 @@ services:
     command: [ "python", "-m", "pytest" ]
 
   embedding-executor:
-    # The only process that loads BGE-M3. Parsing and document-embedding Celery
-    # work run in independent services below, but both proxy model calls to
-    # this internal HTTP endpoint so the model remains loaded exactly once.
+    # The only process that loads local embedding model, parsing model(if needed).
     image: dotori-app:local
     build: *dotori-ai-build
     container_name: embedding-executor
     restart: unless-stopped
-    # Relative CPU priority, not a hard cap: app and dotori-llm are left at
-    # Docker's default (1024), so under real contention (embedding running
-    # while the LLM is generating) the scheduler favors them over
-    # embedding-executor. When the host is idle, embedding-executor can still use
-    # every core it wants -- this only bites when cores are actually contested.
+    # Allocating GPU to embedding-executor may induce OOM when dotori-llm 
+    # oversubscribe GPU memory. If OOM occurs, remove this section.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    # Relative CPU priority: app and dotori-llm are eleft at Docker's default 
+    # prioity (1024), and so under contention over CPU cores, embedding-executor
+    # is de-priotized.
     cpu_shares: ${EMBEDDING_MODEL_CPU_SHARES:-256}
     env_file:
       - .env
@@ -157,8 +160,7 @@ services:
       SERVICE_NAME: embedding-executor
       DOTORI_SERVICE_ROLE: embedding-model
       DOTORI_EXECUTOR_ROLE: embedding
-      # embedding-executor is the only process allowed to load BGE-M3. app calls
-      # /embed/ over the compose network instead of loading the model itself;
+      # app calls /embed/ over the compose network instead of loading the model itself;
       # this Host header must be accepted.
       DOTORI_DJANGO_ALLOWED_HOSTS: embedding-executor,localhost,127.0.0.1
     depends_on:
@@ -168,7 +170,7 @@ services:
         condition: service_healthy
     expose:
       - "${EMBEDDING_SERVICE_PORT:-8001}"
-    # One model-owning process. Increasing --workers would duplicate BGE-M3.
+    # One model-owning process recommended. Increasing --workers would load multiple models.
     command: [ "bash", "-lc", "DOTORI_EMBEDDING_MODEL_PROCESS=1 exec gunicorn config.wsgi:application --bind 0.0.0.0:$${EMBEDDING_SERVICE_PORT:-8001} --workers 1 --threads $${EMBEDDING_HTTP_THREADS:-8} --timeout $${EMBEDDING_EXECUTOR_TIMEOUT:-1860}" ]
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${EMBEDDING_SERVICE_PORT:-8001}/readyz')" ]
@@ -211,8 +213,7 @@ services:
       start_period: 20s
 
   dotori-orchestrator:
-    # Queue transport only: this image intentionally excludes AI and Docling
-    # dependencies. It dispatches durable work to the two executor HTTP APIs.
+    # Queue transport only: It dispatches durable work to the executors via HTTP APIs.
     image: dotori-orchestrator:local
     build:
       context: .
@@ -275,14 +276,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-  # The RAG runtime container (llama.cpp or vLLM, whichever is selected) is
-  # intentionally NOT defined here. It's a single, scope-scoped container
-  # ("dotori-llm") managed directly by
-  # app/llm_installation/runtime_lifecycle.py (plain docker build/run/stop/rm),
-  # reachable from app at http://rag-runtime:8080 over the
-  # named "rag-runtime" network below. See
-  # dev-docs/agent/rag-runtime-container-lifecycle.md.
 
+# The RAG runtime container (llama.cpp or vLLM, whichever is selected) is
+# NOT defined here. It's a single, scope-scoped container ("dotori-llm") managed
+# directly by app/llm_installation/runtime_lifecycle.py (plain docker build),
+# reachable from app at http://rag-runtime:8080 over the named "rag-runtime" network below.
 networks:
   rag-runtime:
     name: dotori-runtime
