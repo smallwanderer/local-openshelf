@@ -1,11 +1,11 @@
 from django.core.management.base import BaseCommand
 
-from document_ai.tasks import (
-    _get_embedding_recovery_chunk_ids,
-    _get_parse_recovery_node_ids,
-    _get_recovery_embedding_batch_size,
-    _get_recovery_parse_batch_size,
-    recover_document_pipeline_backlog,
+from document_ai.processing.recovery import (
+    get_embedding_recovery_chunk_ids,
+    get_parse_recovery_node_ids,
+    get_recovery_embedding_batch_size,
+    get_recovery_parse_batch_size,
+    recover_document_pipeline_backlog_sync,
 )
 
 
@@ -19,8 +19,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         if options["dry_run"]:
-            parse_ids = _get_parse_recovery_node_ids(_get_recovery_parse_batch_size())
-            chunk_ids = _get_embedding_recovery_chunk_ids(_get_recovery_embedding_batch_size())
+            parse_ids = get_parse_recovery_node_ids(get_recovery_parse_batch_size())
+            chunk_ids = get_embedding_recovery_chunk_ids(
+                get_recovery_embedding_batch_size()
+            )
             self.stdout.write(
                 self.style.WARNING(
                     f"repair candidates: parse_nodes={len(parse_ids)} embedding_chunks={len(chunk_ids)}"
@@ -28,5 +30,5 @@ class Command(BaseCommand):
             )
             return
 
-        result = recover_document_pipeline_backlog.run()
+        result = recover_document_pipeline_backlog_sync()
         self.stdout.write(self.style.SUCCESS(f"repair queued: {result}"))

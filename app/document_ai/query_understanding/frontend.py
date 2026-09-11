@@ -121,9 +121,9 @@ def prepare_retrieval_query(raw_query: str, *, mode: str = "search", owner=None,
     """
     Query-understanding boundary before vector retrieval.
 
-    The current in-process implementation calls the Celery task function
-    directly for compatibility. This module is the boundary to replace with a
-    remote query-understanding service when the deployment profile enables it.
+    The current in-process implementation calls the owning parser service
+    directly. This module is the boundary to replace with a remote
+    query-understanding service when the deployment profile enables it.
     """
     normalized_query = normalize_extracted_text(raw_query or "").strip()
     frontend_mode = os.getenv("QUERY_UNDERSTANDING_FRONTEND_MODE", "passthrough").strip().lower()
@@ -146,9 +146,9 @@ def prepare_retrieval_query(raw_query: str, *, mode: str = "search", owner=None,
         )
 
     try:
-        from document_ai.tasks import parse_user_query
+        from document_ai.query_understanding.parser_service import parse_user_query_sync
 
-        result = parse_user_query(normalized_query, mode)
+        result = parse_user_query_sync(normalized_query, mode)
         query_log = _create_query_log(owner=owner, workspace=workspace, raw_query=raw_query, mode=mode, result=result)
         return _plan_from_result(raw_query, mode=mode, result=result, query_log=query_log)
     except Exception as exc:

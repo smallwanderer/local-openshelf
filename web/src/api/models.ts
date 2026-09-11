@@ -1,5 +1,5 @@
 export type DocumentView = 'files' | 'recent' | 'starred' | 'trash'
-export type DocumentProcessingStatus = 'ready' | 'processing' | 'failed' | 'disabled'
+export type DocumentProcessingStatus = 'ready' | 'processing' | 'failed' | 'stale' | 'disabled'
 export type DocumentNodeType = 'file' | 'directory'
 
 export interface DocumentAiStatus {
@@ -10,6 +10,11 @@ export interface DocumentAiStatus {
   chunkCount: number
   completedChunks: number
   failedChunks: number
+  embeddingContractStatus: string
+  activeEmbeddingGenerationId: string
+  embeddedGenerationIds: string[]
+  reembeddingRequired: boolean
+  searchable: boolean
 }
 
 export interface DocumentSummary {
@@ -75,7 +80,8 @@ export interface DocumentReadiness {
   readyPercent: number
   summary: string
   parse: { completed: number; pending: number; processing: number; failed: number }
-  embedding: { completed: number; pending: number; processing: number; failed: number }
+  embedding: { completed: number; pending: number; processing: number; failed: number; stale: number }
+  activeEmbeddingGenerationId: string
 }
 
 export type SearchMode = 'basic' | 'advanced'
@@ -144,6 +150,8 @@ export interface RagRequest {
   threshold?: number
   language: 'ko' | 'en'
   nodeIds: string[]
+  conversationUid?: string
+  clientRequestId?: string
 }
 
 export interface RagCitation {
@@ -186,6 +194,35 @@ export interface RagHistoryItem {
   performanceMetrics: Record<string, unknown>
   completedAt: string | null
   createdAt: string
+}
+
+export interface RagConversation {
+  uid: string
+  title: string
+  defaultNodeIds: string[]
+  revision: number
+  createdById: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RagConversationMessage {
+  uid: string
+  sequence: number
+  role: 'user' | 'assistant'
+  content: string
+  nodeIds: string[]
+  replyToUid: string | null
+  createdAt: string
+  ragJob: null | {
+    id: number
+    status: string
+    answer: string
+    citations: RagCitation[]
+    errorMessage: string
+    performanceMetrics: Record<string, unknown>
+    completedAt: string | null
+  }
 }
 
 export interface ServerPolicySummary {

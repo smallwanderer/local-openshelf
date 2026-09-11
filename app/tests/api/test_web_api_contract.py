@@ -178,7 +178,7 @@ class WebApiContractTests(TestCase):
             }.issubset(payload["files"][0])
         )
 
-    @patch("document_ai.signals.parse_document_with_docling.delay")
+    @patch("document_ai.signals.enqueue_parse")
     def test_multipart_upload_returns_owned_file_contract(self, parse_delay):
         upload = SimpleUploadedFile(
             "contract.txt",
@@ -258,7 +258,7 @@ class WebApiContractTests(TestCase):
             node_type=NodeType.FILE,
             parent=folder,
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=own_file,
                 original_name="scope.txt",
@@ -307,19 +307,7 @@ class WebApiContractTests(TestCase):
                 }
             ],
         }
-        query_plan = SimpleNamespace(
-            retrieval_query="normalized query",
-            query_log=None,
-            source="llm_query_pipeline",
-            intent="question",
-            confidence=0.9,
-            warnings=[],
-            metadata={"filters": [], "sorts": []},
-        )
         with patch(
-            "document_ai.search.views.prepare_retrieval_query",
-            return_value=query_plan,
-        ), patch(
             "document_ai.search.views.search_documents_sync",
             return_value=([result], {"request_search_ms": 12.5}),
         ) as search:
@@ -335,23 +323,21 @@ class WebApiContractTests(TestCase):
             "performance_metrics": {"request_search_ms": 12.5},
             "query_plan": {
                 "mode": "advanced",
-                "source": "llm_query_pipeline",
-                "retrieval_query": "normalized query",
-                "intent": "question",
-                "confidence": 0.9,
+                "source": "direct",
+                "retrieval_query": "policy",
+                "intent": "",
+                "confidence": None,
                 "warnings": [],
                 "filters": [],
                 "sorts": [],
             },
         })
         self.assertEqual(search.call_args.kwargs["owner"], self.user)
-        self.assertEqual(search.call_args.kwargs["query"], "normalized query")
+        self.assertEqual(search.call_args.kwargs["query"], "policy")
         self.assertEqual(search.call_args.kwargs["top_k"], 3)
 
     def test_basic_search_bypasses_query_understanding(self):
         with patch(
-            "document_ai.search.views.prepare_retrieval_query",
-        ) as prepare_query, patch(
             "document_ai.search.views.search_documents_sync",
             return_value=([], {"request_search_ms": 3.0}),
         ) as search:
@@ -362,7 +348,6 @@ class WebApiContractTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        prepare_query.assert_not_called()
         self.assertEqual(search.call_args.kwargs["query"], "direct policy")
         self.assertEqual(search.call_args.kwargs["orm_constraints"], {
             "filter_kwargs": {},
@@ -384,10 +369,8 @@ class WebApiContractTests(TestCase):
         from document_ai.embedding.providers.base import EmbeddingBusyError
 
         with patch(
-            "document_ai.search.views.prepare_retrieval_query",
-        ), patch(
             "document_ai.search.views.search_documents_sync",
-            side_effect=EmbeddingBusyError("dotori-document is busy", retry_after_seconds=7.0),
+            side_effect=EmbeddingBusyError("embedding-executor is busy", retry_after_seconds=7.0),
         ):
             response = self.client.post(
                 reverse("document_ai:vector-search"),
@@ -491,7 +474,7 @@ class WebApiContractTests(TestCase):
             "document_ai.rag.streaming.create_rag_streaming_response_async",
             new=AsyncMock(
                 side_effect=RAGSearchBusyError(
-                    "dotori-document is busy (EMBEDDING_BUSY), retry after 6.0s",
+                    "embedding-executor is busy (EMBEDDING_BUSY), retry after 6.0s",
                     retry_after_seconds=6.0,
                 )
             ),
@@ -520,13 +503,15 @@ class WebApiContractTests(TestCase):
             completed_at=timezone.now(),
         )
         RAGJob.objects.create(
+            workspace=own_job.workspace,
             owner=self.other_user,
-            question="private question",
+            question="private question in same workspace",
             answer="private answer",
             status=AIStatus.COMPLETED,
             completed_at=timezone.now(),
         )
         RAGJob.objects.create(
+            workspace=own_job.workspace,
             owner=self.user,
             question="failed question",
             status=AIStatus.FAILED,

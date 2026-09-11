@@ -9,5 +9,9 @@
   "tokenizer_revision": "5617a9f",
   "dimension": 1024,
   "model_input_max_tokens": 8192,
-  "languages": ["multilingual"]
+  "languages": ["multilingual"],
+  "footprint": {
+    "parameter_count_m": 568,
+    "peak_activation_mb": 0
+  }
 }

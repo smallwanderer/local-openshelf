@@ -5,6 +5,25 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class EmbeddingFootprintSpec(BaseModel):
+    """Declared memory cost of holding this model resident.
+
+    Weights are derived from the parameter count at claim time rather than
+    stored per device, because the same model costs fp16 on CUDA and fp32 on
+    CPU -- the same reason the LLM planner derives weights from
+    ``parameter_count_b`` instead of storing a single number.
+
+    ``peak_activation_mb`` is 0 until a real run measures it. It is recorded
+    separately from the weights so a reservation can say which half is a
+    declared floor and which half has been observed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parameter_count_m: float = Field(gt=0)
+    peak_activation_mb: int = Field(default=0, ge=0)
+
+
 class EmbeddingModelEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -19,6 +38,7 @@ class EmbeddingModelEntry(BaseModel):
     dimension: int = Field(gt=0)
     model_input_max_tokens: int = Field(gt=0)
     languages: list[str] = Field(default_factory=list)
+    footprint: EmbeddingFootprintSpec | None = None
 
 
 class EmbeddingProfileEntry(BaseModel):
@@ -76,3 +96,4 @@ class EmbeddingCatalogEntry(BaseModel):
         default_factory=list
     )
     languages: list[str] = Field(default_factory=list)
+    footprint: EmbeddingFootprintSpec | None = None

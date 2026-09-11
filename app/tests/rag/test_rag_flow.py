@@ -108,7 +108,7 @@ class RAGFlowTests(TestCase):
         search_job = SearchJob.objects.create(owner=self.user, query="대책 요약", top_k=3)
 
         def fake_retrieve(**kwargs):
-            raise EmbeddingBusyError("dotori-document is busy", retry_after_seconds=4.0)
+            raise EmbeddingBusyError("embedding-executor is busy", retry_after_seconds=4.0)
 
         fake_retriever = SimpleNamespace(retrieve=fake_retrieve)
         with patch("document_ai.search.retriever.VectorRetriever", return_value=fake_retriever):
@@ -130,7 +130,7 @@ class RAGFlowTests(TestCase):
             "document_ai.search.execution.perform_vector_search_sync",
             return_value={
                 "status": "failed",
-                "error": "dotori-document is busy",
+                "error": "embedding-executor is busy",
                 "error_code": "EMBEDDING_BUSY",
                 "retry_after_seconds": 3.0,
             },
@@ -247,7 +247,7 @@ class RAGFlowTests(TestCase):
 
     def _retired_rag_request_does_not_call_query_parser_even_when_frontend_mode_is_llm(self):
         with patch.dict("os.environ", {"QUERY_UNDERSTANDING_FRONTEND_MODE": "llm"}), patch(
-            "document_ai.tasks.parse_user_query"
+            "document_ai.query_understanding.parser_service.parse_user_query_sync"
         ) as parse_user_query, patch("document_ai.search.views.perform_vector_search.apply_async") as apply_async:
             apply_async.return_value = SimpleNamespace(id="search-task-id")
             response = self.client.post(
@@ -398,7 +398,7 @@ class RAGFlowTests(TestCase):
             node_type=NodeType.FILE,
             parent=folder,
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=file_node,
                 original_name="report.txt",
@@ -1011,7 +1011,7 @@ class RAGFlowTests(TestCase):
         }
 
         with patch.dict("os.environ", {"QUERY_UNDERSTANDING_FRONTEND_MODE": "llm"}), patch(
-            "document_ai.tasks.parse_user_query", return_value=parsed_query
+            "document_ai.query_understanding.parser_service.parse_user_query_sync", return_value=parsed_query
         ):
             plan = prepare_retrieval_query("안녕 너 뭐 할 수 있어?", mode="rag", owner=self.user)
 
@@ -1038,7 +1038,7 @@ class RAGFlowTests(TestCase):
             node_type=NodeType.FILE,
             parent=folder,
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=file_node,
                 original_name="report.txt",

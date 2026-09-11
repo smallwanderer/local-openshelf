@@ -81,14 +81,14 @@ grep <trace_id> data/logs/*.log
 
 ## 3. 로그 파일 훑어보기
 
-`app`과 `dotori-document` 두 컨테이너는 로그를 서비스별로 나눠 씁니다(같은 파일에 동시에 쓰면 로그 줄이 섞일 수 있어서 분리했습니다). 위치는 `data/logs/`이며 파일당 최대 10MB, 백업 5개로 자동 로테이션됩니다.
+`app`과 각 executor는 로그를 서비스별로 나눠 씁니다(같은 파일에 동시에 쓰면 로그 줄이 섞일 수 있어서 분리했습니다). 위치는 `data/logs/`이며 파일당 최대 10MB, 백업 5개로 자동 로테이션됩니다.
 
 | 파일 | 내용 |
 |---|---|
-| `operations.{app\|dotori-document}.log` | Django/Celery 프레임워크 자체 로그와 그 외 나머지 |
-| `document_ai.{app\|dotori-document}.log` | 파싱→임베딩→검색→RAG 파이프라인의 진행 상황 서술 로그 (큐 시작/완료, 실패 원인 등) |
-| `files.{app\|dotori-document}.log` | 업로드·폴더 생성·이름변경·이동·삭제, 동기화(sync) API 로그 |
-| `db_span.{app\|dotori-document}.log` | 계측 대상 함수(검색·RAG·파싱·임베딩) 안에서 실행된 SQL 문 단위 기록. 어떤 쿼리가 몇 번 실행됐는지 확인할 수 있으며, **바인딩 파라미터 값(검색어·문서 내용 등)은 절대 남기지 않습니다** |
+| `operations.<service>.log` | Django/Celery 프레임워크 자체 로그와 그 외 나머지 |
+| `document_ai.<service>.log` | 파싱→임베딩→검색→RAG 파이프라인의 진행 상황 서술 로그 (큐 시작/완료, 실패 원인 등) |
+| `files.<service>.log` | 업로드·폴더 생성·이름변경·이동·삭제, 동기화(sync) API 로그 |
+| `db_span.<service>.log` | 계측 대상 함수(검색·RAG·파싱·임베딩) 안에서 실행된 SQL 문 단위 기록. 어떤 쿼리가 몇 번 실행됐는지 확인할 수 있으며, **바인딩 파라미터 값(검색어·문서 내용 등)은 절대 남기지 않습니다** |
 
 모든 로그 줄에는 같은 포맷으로 `trace_id`가 찍힙니다. `trace_id`가 없는 로그 줄은 `-`로 표시되며, 이는 요청과 무관한 백그라운드 동작이거나 아직 trace가 전파되지 않은 경로라는 뜻입니다.
 
@@ -146,7 +146,7 @@ python3 scripts/check_rag_stream.py --cookie '...' --csrf-token '...' --requests
 
 ### 4.3 그 밖의 성능 확인 도구
 
-RAG 답변 생성 쪽 동시성을 실측 데이터로 조정하고 싶다면 [운영 가이드 7.4장](./operation-guide.md#74-llm-운용-동시성-calibration)의 calibration 스크립트를, 요청 단위 성능 수치를 직접 집계하고 싶다면 [운영 가이드 3.5장](./operation-guide.md#35-성능-지표와-자원-확인)을 참고하세요.
+RAG 답변 생성 쪽 동시성을 실측 데이터로 조정하고 싶다면 [운영 가이드](./operation-guide.md#llm-운용-동시성-calibration)의 calibration 스크립트를, 요청 단위 성능 수치를 직접 집계하고 싶다면 [운영 가이드](./operation-guide.md#성능-지표와-자원-확인)를 참고하세요.
 
 ---
 

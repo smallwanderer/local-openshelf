@@ -2,7 +2,7 @@ import json
 from io import StringIO
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 
 from document_ai.services.embedding_runtime_config import (
     EmbeddingRuntimeConfigError,
@@ -127,7 +127,7 @@ def test_migration_seeds_legacy_embedding_generation():
 
 
 @pytest.mark.django_db
-def test_rollback_restores_preserved_generation(
+def test_rollback_requires_reembedding_or_database_restore(
     tmp_path,
     monkeypatch,
 ):
@@ -166,33 +166,96 @@ def test_rollback_restores_preserved_generation(
         supports_sparse=entry.supports_sparse,
         status="ACTIVE",
     )
-    monkeypatch.setenv("EMBEDDING_RUNTIME_CONFIG_PATH", str(active_path))
-    monkeypatch.setattr(
-        rollback_embedding_runtime,
-        "get_embedding_runtime_config_path",
-        lambda scope: active_path,
-    )
-    monkeypatch.setattr(
-        rollback_embedding_runtime,
-        "commit_active_embedding_runtime",
-        lambda scope, generation_id: commit_active_embedding_runtime(
-            scope,
-            generation_id,
-            repo_root=tmp_path,
-        ),
-    )
-
-    call_command(
-        "rollback_embedding_runtime",
-        scope="production",
-        stdout=StringIO(),
-    )
+    with pytest.raises(CommandError, match="cannot be activated"):
+        call_command(
+            "rollback_embedding_runtime",
+            scope="production",
+            stdout=StringIO(),
+        )
 
     old.refresh_from_db()
     current.refresh_from_db()
-    assert old.status == "ACTIVE"
-    assert current.status == "FAILED"
+    assert old.status == "RETIRED"
+    assert current.status == "ACTIVE"
     assert load_embedding_runtime(
         path=active_path,
         scope="production",
-    ).generation_id == "gen-old"
+    ).generation_id == "gen-new"
+
+
+def test_embedding_runtime_generation_includes_max_tokens(tmp_path):
+    entry = get_embedding_catalog_entry_for_preset("balanced")
+    generation_dir = write_embedding_runtime_generation(
+        scope="production",
+        generation_id="embedding-test-tokens",
+        entry=entry,
+        repo_root=tmp_path,
+    )
+    payload = json.loads((generation_dir / "runtime.json").read_text(encoding="utf-8"))
+    assert "max_tokens" in payload
+    assert payload["max_tokens"] == entry.model_input_max_tokens
+
+
+def test_legacy_fingerprint_compatibility(tmp_path):
+    entry = get_embedding_catalog_entry_for_preset("balanced")
+    from llm_installation.embedding_config_store import build_embedding_runtime_payload
+    import hashlib
+
+    payload = build_embedding_runtime_payload(
+        scope="production",
+        generation_id="legacy-v1",
+        entry=entry,
+    )
+    # Strip max_tokens and sign as v1 legacy
+    payload.pop("max_tokens", None)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload["runtime_fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    path = tmp_path / "legacy_embedding_runtime.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    runtime = load_embedding_runtime(path=path, scope="production")
+    assert runtime.max_tokens == 8192
+    assert runtime.generation_id == "legacy-v1"
+
+
+def test_dynamic_parser_config_resolution(monkeypatch):
+    from document_ai.parsers.config import (
+        get_embedding_max_tokens,
+        get_chunk_max_tokens,
+        get_parser_tokenizer_id,
+        get_parser_tokenizer_revision,
+        get_embedding_token_headroom,
+        clear_parser_tokenizer_cache,
+    )
+    from document_ai.services.embedding_runtime_config import EmbeddingRuntimeSnapshot
+
+    fake_runtime = EmbeddingRuntimeSnapshot(
+        scope="production",
+        catalog_id="test-cat",
+        catalog_revision="v1",
+        generation_id="test-gen",
+        model_id="custom/embed-model",
+        model_revision="main",
+        tokenizer_id="custom/tokenizer-id",
+        tokenizer_revision="main",
+        provider="custom_provider",
+        store="pgvector_chunk_512",
+        dimension=512,
+        max_tokens=512,
+        supports_sparse=False,
+        distance_strategy="cosine",
+    )
+
+    import document_ai.parsers.config as p_config
+    monkeypatch.setattr(
+        "document_ai.services.embedding_runtime_config.get_active_embedding_runtime",
+        lambda *args, **kwargs: fake_runtime,
+    )
+    clear_parser_tokenizer_cache()
+
+    assert get_parser_tokenizer_id() == "custom/tokenizer-id"
+    assert get_parser_tokenizer_revision() is None
+    assert get_embedding_max_tokens() == 512
+    headroom = get_embedding_token_headroom()
+    assert get_chunk_max_tokens() == 512 - headroom

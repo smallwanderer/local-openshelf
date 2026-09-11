@@ -9,6 +9,8 @@ import type {
   DocumentSummary,
   DocumentUploadResult,
   RagCitation,
+  RagConversation,
+  RagConversationMessage,
   RagHistoryItem,
   RagRequest,
   RagStreamHandlers,
@@ -38,6 +40,10 @@ export interface WorkspaceApi {
   listSearchScopes(query?: string): Promise<SearchScopeNode[]>
   searchDocuments(request: SearchRequest): Promise<SearchResponse>
   listRagHistory(limit?: number): Promise<RagHistoryItem[]>
+  listRagConversations(): Promise<RagConversation[]>
+  createRagConversation(title: string, defaultNodeIds: string[]): Promise<RagConversation>
+  getRagConversation(uid: string): Promise<RagConversation>
+  listRagConversationMessages(uid: string): Promise<RagConversationMessage[]>
   streamAnswer(
     request: RagRequest,
     handlers: RagStreamHandlers,
@@ -52,6 +58,11 @@ interface ApiAiStatus {
   chunk_count?: number
   completed_chunks?: number
   failed_chunks?: number
+  embedding_contract_status?: string
+  active_embedding_generation_id?: string
+  embedded_generation_ids?: string[]
+  reembedding_required?: boolean
+  searchable?: boolean
 }
 
 interface ApiNode {
@@ -92,6 +103,7 @@ interface ApiReadinessResponse {
   summary: string
   parse: DocumentReadiness['parse']
   embedding: DocumentReadiness['embedding']
+  active_embedding_generation_id?: string
 }
 
 interface ApiScopeNode {
@@ -167,6 +179,35 @@ interface ApiRagHistoryResponse {
   }>
 }
 
+interface ApiRagConversation {
+  uid: string
+  title: string
+  default_node_ids?: string[]
+  revision: number
+  created_by_id?: number | null
+  created_at: string
+  updated_at: string
+}
+
+interface ApiRagMessage {
+  uid: string
+  sequence: number
+  role: 'user' | 'assistant'
+  content?: string
+  node_ids?: string[]
+  reply_to_uid?: string | null
+  created_at: string
+  rag_job?: null | {
+    id: number
+    status: string
+    answer?: string
+    citations?: ApiRagCitation[]
+    error_message?: string
+    performance_metrics?: Record<string, unknown>
+    completed_at?: string | null
+  }
+}
+
 type ApiRagEvent =
   | { type: 'started'; job_id: number; llm_target?: string; llm_model?: string }
   | { type: 'sources'; citations?: ApiRagCitation[] }
@@ -200,6 +241,11 @@ function mapAiStatus(raw?: ApiAiStatus | null): DocumentAiStatus | null {
     chunkCount: raw.chunk_count ?? 0,
     completedChunks: raw.completed_chunks ?? 0,
     failedChunks: raw.failed_chunks ?? 0,
+    embeddingContractStatus: raw.embedding_contract_status ?? 'missing',
+    activeEmbeddingGenerationId: raw.active_embedding_generation_id ?? '',
+    embeddedGenerationIds: raw.embedded_generation_ids ?? [],
+    reembeddingRequired: Boolean(raw.reembedding_required),
+    searchable: Boolean(raw.searchable),
   }
 }
 
@@ -207,6 +253,7 @@ function mapStatus(node: ApiNode): DocumentSummary['status'] {
   if (!node.ai_processing_enabled && node.node_type === 'file') return 'disabled'
   if (node.node_type === 'directory') return 'ready'
   const aiStatus = node.ai_status
+  if (aiStatus?.embedding_contract_status === 'stale_contract') return 'stale'
   if (aiStatus?.parse_status === 'failed' || aiStatus?.embedding_status === 'failed') return 'failed'
   if (aiStatus?.parse_status === 'completed' && aiStatus?.embedding_status === 'completed') return 'ready'
   return 'processing'
@@ -293,6 +340,39 @@ function mapRagCitation(citation: ApiRagCitation): RagCitation {
   }
 }
 
+function mapRagConversation(value: ApiRagConversation): RagConversation {
+  return {
+    uid: value.uid,
+    title: value.title,
+    defaultNodeIds: value.default_node_ids ?? [],
+    revision: value.revision,
+    createdById: value.created_by_id ?? null,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  }
+}
+
+function mapRagMessage(value: ApiRagMessage): RagConversationMessage {
+  return {
+    uid: value.uid,
+    sequence: value.sequence,
+    role: value.role,
+    content: value.content ?? '',
+    nodeIds: value.node_ids ?? [],
+    replyToUid: value.reply_to_uid ?? null,
+    createdAt: value.created_at,
+    ragJob: value.rag_job ? {
+      id: value.rag_job.id,
+      status: value.rag_job.status,
+      answer: value.rag_job.answer ?? '',
+      citations: (value.rag_job.citations ?? []).map(mapRagCitation),
+      errorMessage: value.rag_job.error_message ?? '',
+      performanceMetrics: value.rag_job.performance_metrics ?? {},
+      completedAt: value.rag_job.completed_at ?? null,
+    } : null,
+  }
+}
+
 function searchDuration(metrics: Record<string, unknown>): number | null {
   for (const key of ['request_search_ms', 'search_total_ms', 'total_ms']) {
     if (typeof metrics[key] === 'number') return metrics[key]
@@ -346,6 +426,7 @@ const djangoDocumentApi: WorkspaceApi = {
       summary: payload.summary,
       parse: payload.parse,
       embedding: payload.embedding,
+      activeEmbeddingGenerationId: payload.active_embedding_generation_id ?? '',
     }
   },
 
@@ -482,6 +563,29 @@ const djangoDocumentApi: WorkspaceApi = {
     }))
   },
 
+  async listRagConversations() {
+    const payload = await apiRequest<{ conversations: ApiRagConversation[] }>('/api/document-ai/v1/rag/conversations/')
+    return payload.conversations.map(mapRagConversation)
+  },
+
+  async createRagConversation(title, defaultNodeIds) {
+    const payload = await apiRequest<{ conversation: ApiRagConversation }>('/api/document-ai/v1/rag/conversations/', {
+      method: 'POST',
+      json: { title, default_node_ids: defaultNodeIds },
+    })
+    return mapRagConversation(payload.conversation)
+  },
+
+  async getRagConversation(uid) {
+    const payload = await apiRequest<{ conversation: ApiRagConversation }>(`/api/document-ai/v1/rag/conversations/${encodeURIComponent(uid)}/`)
+    return mapRagConversation(payload.conversation)
+  },
+
+  async listRagConversationMessages(uid) {
+    const payload = await apiRequest<{ messages: ApiRagMessage[] }>(`/api/document-ai/v1/rag/conversations/${encodeURIComponent(uid)}/messages/`)
+    return payload.messages.map(mapRagMessage)
+  },
+
   streamAnswer(request, handlers) {
     const controller = new AbortController()
     handlers.onPhase('searching')
@@ -544,7 +648,10 @@ const djangoDocumentApi: WorkspaceApi = {
       }
 
       try {
-        const response = await apiFetch('/api/document-ai/v1/rag/stream/', {
+        const streamUrl = request.conversationUid
+          ? `/api/document-ai/v1/rag/conversations/${encodeURIComponent(request.conversationUid)}/messages/stream/`
+          : '/api/document-ai/v1/rag/stream/'
+        const response = await apiFetch(streamUrl, {
           method: 'POST',
           signal: controller.signal,
           json: {
@@ -552,6 +659,7 @@ const djangoDocumentApi: WorkspaceApi = {
             ...(request.topK === undefined ? {} : { top_k: request.topK }),
             ...(request.threshold === undefined ? {} : { threshold: request.threshold }),
             language: request.language,
+            ...(request.clientRequestId ? { client_request_id: request.clientRequestId } : {}),
             ...(request.nodeIds.length ? { node_ids: request.nodeIds } : {}),
           },
         })
@@ -601,6 +709,9 @@ const answerChunks = [
 
 const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 
+const mockConversations: RagConversation[] = []
+const mockConversationMessages = new Map<string, RagConversationMessage[]>()
+
 const mockWorkspaceApi: WorkspaceApi = {
   async listDocuments(options) {
     await wait(120)
@@ -623,7 +734,15 @@ const mockWorkspaceApi: WorkspaceApi = {
   },
   async getReadiness() {
     await wait(80)
-    return { totalFiles: 2, searchableFiles: 1, readyPercent: 50, summary: '1개 문서가 준비되었습니다.', parse: { completed: 1, pending: 0, processing: 1, failed: 0 }, embedding: { completed: 1, pending: 1, processing: 0, failed: 0 } }
+    return {
+      totalFiles: 2,
+      searchableFiles: 1,
+      readyPercent: 50,
+      summary: '1개 문서가 준비되었습니다.',
+      parse: { completed: 1, pending: 0, processing: 1, failed: 0 },
+      embedding: { completed: 1, pending: 1, processing: 0, failed: 0, stale: 0 },
+      activeEmbeddingGenerationId: 'mock-active-generation',
+    }
   },
   getDownloadUrl(uid) { return `/files/api/v1/${encodeURIComponent(uid)}/download/` },
   async uploadDocument(file, options) {
@@ -659,6 +778,25 @@ const mockWorkspaceApi: WorkspaceApi = {
     }
   },
   async listRagHistory() { return [] },
+  async listRagConversations() { return [...mockConversations] },
+  async createRagConversation(title, defaultNodeIds) {
+    const now = new Date().toISOString()
+    const conversation: RagConversation = {
+      uid: crypto.randomUUID(), title, defaultNodeIds, revision: 1,
+      createdById: 1, createdAt: now, updatedAt: now,
+    }
+    mockConversations.unshift(conversation)
+    mockConversationMessages.set(conversation.uid, [])
+    return conversation
+  },
+  async getRagConversation(uid) {
+    const conversation = mockConversations.find((item) => item.uid === uid)
+    if (!conversation) throw new Error('Conversation not found')
+    return conversation
+  },
+  async listRagConversationMessages(uid) {
+    return [...(mockConversationMessages.get(uid) ?? [])]
+  },
   streamAnswer(_request, handlers) {
     const timers: number[] = []
     const schedule = (callback: () => void, delay: number) => timers.push(window.setTimeout(callback, delay))

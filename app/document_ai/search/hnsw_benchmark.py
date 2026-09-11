@@ -91,7 +91,7 @@ def _nearest_neighbor_sql() -> str:
         INNER JOIN {chunk_table} chunk ON chunk.id = embedding.chunk_id
         INNER JOIN {parse_table} parse_result ON parse_result.id = chunk.parse_result_id
         INNER JOIN {node_table} node ON node.id = parse_result.node_id
-        WHERE embedding.generation_id = %s
+        WHERE parse_result.embedding_generation_id = %s
           AND embedding.status = %s
           AND embedding.vector IS NOT NULL
           AND node.workspace_id = %s
@@ -213,7 +213,11 @@ def resolve_scope(*, workspace, generation_id: str | None = None) -> tuple[Bench
         vector__isnull=False,
     )
     available_generations = list(
-        queryset.values_list("generation_id", flat=True).distinct().order_by("generation_id")
+        queryset.values_list(
+            "chunk__parse_result__embedding_generation_id", flat=True
+        ).exclude(
+            chunk__parse_result__embedding_generation_id=""
+        ).distinct().order_by("chunk__parse_result__embedding_generation_id")
     )
     if generation_id is None:
         if not available_generations:
@@ -225,7 +229,9 @@ def resolve_scope(*, workspace, generation_id: str | None = None) -> tuple[Bench
     elif generation_id not in available_generations:
         raise ValueError(f"Generation {generation_id!r} has no completed vectors in this workspace.")
 
-    queryset = queryset.filter(generation_id=generation_id).order_by("id")
+    queryset = queryset.filter(
+        chunk__parse_result__embedding_generation_id=generation_id
+    ).order_by("id")
     embedding_ids = list(queryset.values_list("id", flat=True))
     generation = EmbeddingGeneration.objects.get(generation_id=generation_id)
     return (

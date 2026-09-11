@@ -15,7 +15,8 @@ from config.enums import AIStatus, FileOperation
 from config.tracing import get_trace_id
 from document_ai.models import DocumentChunk, DocumentParseResult, RAGJob
 from document_ai.performance import elapsed_ms, put_metric
-from document_ai.tasks import enqueue_embedding_tasks, parse_document_with_docling
+from document_ai.orchestration import enqueue_embedding, enqueue_parse
+from document_ai.services.embedding_runtime_config import get_active_embedding_runtime
 from document_ai.tracing_utils import enqueue_kwargs
 from files.models import FileOperationLog, Node, NodeType, UserStorage
 from files.services import file_service
@@ -144,17 +145,17 @@ def upload_file(request):
         _record_file_operation(request.user, None, FileOperation.UPLOAD, started=started, ok=False, error_message="No file provided.")
         return JsonResponse({"ok": False, "status": "error", "errors": ["No file provided."]}, status=400)
 
+    parent_id = request.POST.get("parent_id")
+    parent = None
+    if parent_id:
+        parent = get_object_or_404(Node, uid=parent_id, workspace=request.workspace, node_type=NodeType.FOLDER)
+
     result = validate_upload(request.workspace, request.user, uploaded_file)
     if not result.ok:
         _record_file_operation(request.user, None, FileOperation.UPLOAD, started=started, ok=False, error_message="; ".join(result.errors), detail=upload_detail())
-        return JsonResponse({"ok": False, "status": "error", "errors": result.errors}, status=400)
+        return JsonResponse({"ok": False, "status": "error", "code": "UPLOAD_VALIDATION_FAILED", "errors": result.errors}, status=400)
 
     try:
-        parent_id = request.POST.get("parent_id")
-        parent = None
-        if parent_id:
-            parent = get_object_or_404(Node, uid=parent_id, workspace=request.workspace, node_type=NodeType.FOLDER)
-
         node = save_file(
             workspace=request.workspace,
             owner=request.user,
@@ -552,6 +553,8 @@ def get_storage_usage(request):
 @email_verification_required
 @require_http_methods(["GET"])
 def ai_readiness(request):
+    active_runtime = get_active_embedding_runtime()
+    active_generation_id = active_runtime.generation_id
     file_qs = Node.objects.filter(
         workspace=request.workspace,
         node_type=NodeType.FILE,
@@ -587,9 +590,9 @@ def ai_readiness(request):
                 filter=Q(parse_result__chunks__status=AIStatus.COMPLETED),
                 distinct=True,
             ),
-            processing_chunks=Count(
+            failed_chunks=Count(
                 "parse_result__chunks",
-                filter=Q(parse_result__chunks__status=AIStatus.PROCESSING),
+                filter=Q(parse_result__chunks__status=AIStatus.FAILED),
                 distinct=True,
             ),
             pending_chunks=Count(
@@ -597,22 +600,40 @@ def ai_readiness(request):
                 filter=Q(parse_result__chunks__status=AIStatus.PENDING),
                 distinct=True,
             ),
-            failed_chunks=Count(
+            processing_chunks=Count(
                 "parse_result__chunks",
-                filter=Q(parse_result__chunks__status=AIStatus.FAILED),
+                filter=Q(parse_result__chunks__status=AIStatus.PROCESSING),
                 distinct=True,
             ),
         )
     )
-    embedding_ready = embedding_qs.filter(total_chunks__gt=0, completed_chunks=F("total_chunks")).count()
+    embedding_ready = embedding_qs.filter(
+        total_chunks__gt=0,
+        completed_chunks=F("total_chunks"),
+        parse_result__embedding_generation_id=active_generation_id,
+        parse_result__embedding_runtime_fingerprint=active_runtime.runtime_fingerprint,
+    ).count()
     embedding_failed = embedding_qs.filter(failed_chunks__gt=0).exclude(
         completed_chunks=F("total_chunks")
     ).count()
+    settled_qs = embedding_qs.filter(processing_chunks=0, pending_chunks=0)
+    embedding_stale = settled_qs.filter(
+        total_chunks__gt=0,
+    ).exclude(parse_result__embedding_generation_id="").exclude(
+        parse_result__embedding_generation_id=active_generation_id,
+        parse_result__embedding_runtime_fingerprint=active_runtime.runtime_fingerprint,
+    ).count()
     embedding_processing = embedding_qs.filter(
-        Q(processing_chunks__gt=0) | Q(completed_chunks__gt=0)
-    ).exclude(completed_chunks=F("total_chunks")).exclude(failed_chunks__gt=0).count()
+        Q(processing_chunks__gt=0) | Q(pending_chunks__gt=0)
+    ).exclude(
+        failed_chunks__gt=0,
+    ).count()
     embedding_pending = max(
-        parse_completed - embedding_ready - embedding_failed - embedding_processing,
+        parse_completed
+        - embedding_ready
+        - embedding_failed
+        - embedding_stale
+        - embedding_processing,
         0,
     )
 
@@ -634,6 +655,7 @@ def ai_readiness(request):
         "searchable_files": searchable_files,
         "ready_percent": ready_percent,
         "summary": summary,
+        "active_embedding_generation_id": active_generation_id,
         "parse": {
             "completed": parse_completed,
             "pending": parse_pending,
@@ -645,6 +667,7 @@ def ai_readiness(request):
             "pending": embedding_pending,
             "processing": embedding_processing,
             "failed": embedding_failed,
+            "stale": embedding_stale,
         },
     })
 
@@ -706,15 +729,23 @@ def retry_ai_processing(request, uid):
             node.parse_result.status = AIStatus.PENDING
             node.parse_result.errors = []
             node.parse_result.save(update_fields=["status", "errors", "updated_at"])
-        parse_document_with_docling.delay(node.id, **enqueue_kwargs())
+        enqueue_parse(node.id, **enqueue_kwargs())
         return JsonResponse({"ok": True, "action": "parse_requeued", "message": "Parsing retry has been queued."})
 
     if embedding_status == AIStatus.FAILED:
-        updated = DocumentChunk.objects.filter(
-            parse_result=node.parse_result,
-            status=AIStatus.FAILED,
-        ).update(status=AIStatus.PENDING, error_message={})
-        enqueue_embedding_tasks.delay(node.id, **enqueue_kwargs())
+        contract_status = ai_status.get("embedding_contract_status")
+        chunks_to_retry = DocumentChunk.objects.filter(parse_result=node.parse_result)
+        if contract_status != "stale_contract":
+            chunks_to_retry = chunks_to_retry.exclude(status=AIStatus.COMPLETED)
+        updated = chunks_to_retry.update(status=AIStatus.PENDING, error_message={})
+        node.parse_result.embedding_generation_id = ""
+        node.parse_result.embedding_runtime_fingerprint = ""
+        node.parse_result.save(update_fields=[
+            "embedding_generation_id",
+            "embedding_runtime_fingerprint",
+            "updated_at",
+        ])
+        enqueue_embedding(node.id, **enqueue_kwargs())
         return JsonResponse({
             "ok": True,
             "action": "embedding_requeued",
@@ -851,7 +882,11 @@ def recent_search_history(request):
         )
     limit = max(1, min(limit, 20))
     rag_jobs = (
-        RAGJob.objects.filter(workspace=request.workspace, status=AIStatus.COMPLETED)
+        RAGJob.objects.filter(
+            workspace=request.workspace,
+            owner=request.user,
+            status=AIStatus.COMPLETED,
+        )
         .select_related("search_job")
         .order_by("-completed_at")[:limit]
     )

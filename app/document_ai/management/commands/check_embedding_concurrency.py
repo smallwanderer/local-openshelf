@@ -34,7 +34,7 @@ class Command(BaseCommand):
         "directly (bypassing the RemoteBGEM3Provider routing that normal request "
         "traffic goes through), so it must run somewhere that actually has "
         "torch/FlagEmbedding installed -- run via "
-        "`docker compose exec dotori-document python manage.py check_embedding_concurrency` "
+        "`docker compose exec embedding-executor python manage.py check_embedding_concurrency` "
         "(not app, which no longer has those dependencies installed at all). "
         "Compares each concurrent result against a sequential ground truth computed "
         "up front; any mismatch, exception, or crash means encode() is not safe to "

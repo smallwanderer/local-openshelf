@@ -57,10 +57,10 @@ function legacyApiError(status: number, statusText: string, payload: unknown): A
       common.error.details,
     )
   }
-  const legacy = payload as { errors?: unknown; detail?: unknown } | undefined
+  const legacy = payload as { errors?: unknown; detail?: unknown; code?: unknown } | undefined
   return new ApiClientError(
     status,
-    status === 401 ? 'AUTHENTICATION_REQUIRED' : 'API_ERROR',
+    typeof legacy?.code === 'string' ? legacy.code : (status === 401 ? 'AUTHENTICATION_REQUIRED' : 'API_ERROR'),
     typeof legacy?.detail === 'string' ? legacy.detail : statusText || 'API request failed.',
     legacy?.errors ?? payload ?? {},
   )

@@ -14,7 +14,7 @@ import { Icon } from '../../components/Icon'
 import { useI18n } from '../../i18n'
 
 type LoadState = AsyncStateKind | 'ready'
-type MutationNotice = { kind: 'success' | 'error'; message: string; errors: string[] }
+type MutationNotice = { kind: 'success' | 'error' | 'warning'; message: string; errors: string[] }
 type LayoutMode = 'list' | 'grid'
 type DocSearchMode = 'normal' | 'ai'
 type AiRow = { document: DocumentSummary; score: number; snippet: string }
@@ -66,21 +66,26 @@ function documentTypeCategory(document: DocumentSummary): 'folder' | 'pdf' | 'im
   return 'other'
 }
 
-function sortDocuments(documents: DocumentSummary[], order: string): DocumentSummary[] {
-  const sorted = [...documents]
+function compareBySortOrder(a: DocumentSummary, b: DocumentSummary, order: string): number {
   switch (order) {
     case 'date_asc':
-      sorted.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
-      break
+      return a.updatedAt.localeCompare(b.updatedAt)
     case 'name_asc':
-      sorted.sort((a, b) => a.name.localeCompare(b.name))
-      break
+      return a.name.localeCompare(b.name)
     case 'size_desc':
-      sorted.sort((a, b) => (b.size ?? -1) - (a.size ?? -1))
-      break
+      return (b.size ?? -1) - (a.size ?? -1)
     default:
-      sorted.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      return b.updatedAt.localeCompare(a.updatedAt)
   }
+}
+
+function sortDocuments(documents: DocumentSummary[], order: string): DocumentSummary[] {
+  const sorted = [...documents]
+  sorted.sort((a, b) => {
+    if (a.nodeType === 'directory' && b.nodeType !== 'directory') return -1
+    if (a.nodeType !== 'directory' && b.nodeType === 'directory') return 1
+    return compareBySortOrder(a, b, order)
+  })
   return sorted
 }
 
@@ -92,7 +97,7 @@ function mutationErrors(error: unknown): string[] {
   return [error instanceof Error ? error.message : String(error)]
 }
 
-export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; onAsk: () => void }) {
+export function DocumentsFeature({ onSearch, onAsk, pendingOpenUid, onPendingOpenHandled }: { onSearch: () => void; onAsk: () => void; pendingOpenUid?: string | null; onPendingOpenHandled?: () => void }) {
   const { t } = useI18n()
   const initialLocation = readLocationState()
   const [view, setView] = useState<DocumentView>(initialLocation.view)
@@ -115,6 +120,7 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
   const [uploadOpen, setUploadOpen] = useState(false)
   const [createFolderOpen, setCreateFolderOpen] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
+  const [trashConfirm, setTrashConfirm] = useState<{ uids: string[] } | null>(null)
   const [mutating, setMutating] = useState(false)
   const [notice, setNotice] = useState<MutationNotice | null>(null)
   const [searchMode, setSearchMode] = useState<DocSearchMode>('normal')
@@ -198,6 +204,17 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
     void loadChain()
     return () => { active = false }
   }, [folderUid])
+
+  useEffect(() => {
+    if (!pendingOpenUid) return
+    let active = true
+    workspaceApi.getDocument(pendingOpenUid)
+      .then((document) => { if (active) void openDocument(document) })
+      .catch(() => undefined)
+      .finally(() => onPendingOpenHandled?.())
+    return () => { active = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpenUid])
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -317,9 +334,15 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
     }
   }
 
-  async function trashSelected() {
-    if (!window.confirm(t('document.confirmTrash'))) return
-    await applyMutation(() => workspaceApi.trashDocuments(selected))
+  function trashSelected() {
+    setTrashConfirm({ uids: selected })
+  }
+
+  async function confirmTrash() {
+    if (!trashConfirm) return
+    const uids = trashConfirm.uids
+    setTrashConfirm(null)
+    await applyMutation(() => workspaceApi.trashDocuments(uids))
   }
 
   async function restoreSelected() {
@@ -400,9 +423,8 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
     }
   }
 
-  async function quickTrash(document: DocumentSummary) {
-    if (!window.confirm(t('document.confirmTrash'))) return
-    await applyMutation(() => workspaceApi.trashDocuments([document.uid]))
+  function quickTrash(document: DocumentSummary) {
+    setTrashConfirm({ uids: [document.uid] })
   }
 
   async function quickRestore(document: DocumentSummary) {
@@ -435,6 +457,7 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
 
   function statusLabel(document: DocumentSummary) {
     if (document.nodeType === 'directory') return t('document.folder')
+    if (document.status === 'stale') return t('document.embeddingOutdated')
     if (document.status === 'failed') return t('document.failed')
     if (document.status === 'disabled') return t('document.disabled')
     return document.status === 'processing' ? t('document.processing') : t('document.ready')
@@ -481,21 +504,40 @@ export function DocumentsFeature({ onSearch, onAsk }: { onSearch: () => void; on
       {notice && <div className={`mutation-notice ${notice.kind}`} role="status"><div><strong>{notice.message}</strong>{notice.errors.length > 0 && <ul>{notice.errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}</ul>}</div><button onClick={() => setNotice(null)} aria-label={t('action.closeMenu')}><Icon name="x" size={14} /></button></div>}
       {mutating && <div className="mutation-working" role="status">{t('mutation.working')}</div>}
       {selected.length > 0 && <div className="selection-bar"><strong>{t('document.selectedCount', { count: selected.length })}</strong><div className="selection-actions">{view === 'trash' ? <><button disabled={mutating} onClick={() => void restoreSelected()}>{t('document.restoreSelected')}</button><button className="danger" disabled={mutating} onClick={() => void permanentlyDeleteSelected()}>{t('document.deleteSelected')}</button></> : <><button disabled={mutating} onClick={() => setMoveOpen(true)}>{t('document.moveSelected')}</button><button className="danger" disabled={mutating} onClick={() => void trashSelected()}>{t('document.trashSelected')}</button></>}<button onClick={() => setSelected([])}>{t('document.clearSelection')}</button></div></div>}
-      {searchMode === 'ai' && !aiSearched ? <div className="async-state empty" role="status"><span><Icon name="sparkles" /></span><strong>{t('document.aiSearchIdleTitle')}</strong><p>{t('document.aiSearchIdleDescription')}</p></div> : activeState === 'ready' ? (layoutMode === 'list' ? <div className="document-table-wrap"><table className="document-table"><thead><tr><th className="check-cell"></th><th className="check-cell"></th><th>{t('document.column.document')}</th><th>{t('document.column.type')}</th><th>{t('document.column.size')}</th><th>{t('document.column.updated')}</th><th>{t('document.column.status')}</th><th></th></tr></thead><tbody>{activeRows.map(({ document, score, snippet }) => <tr key={document.uid} className="document-row" onClick={() => void openDocument(document)}><td className="check-cell"><button className={`checkbox ${selected.includes(document.uid) ? 'checked' : ''}`} onClick={(event) => { event.stopPropagation(); toggleSelected(document.uid) }}>{selected.includes(document.uid) && <Icon name="check" size={13} />}</button></td><td className="check-cell"><button className={`star-toggle ${document.starred ? 'active' : ''}`} disabled={mutating || view === 'trash'} title={t(document.starred ? 'document.unstar' : 'document.star')} onClick={(event) => { event.stopPropagation(); void toggleStar(document) }}>★</button></td><td><div className="document-name"><span className={`file-type ${document.type.toLowerCase()}`}>{document.nodeType === 'directory' ? 'D' : document.type.slice(0, 1)}</span><div><strong>{document.name}</strong>{document.nodeType === 'directory' && <small>{document.path}</small>}{searchMode === 'ai' && <p className="ai-snippet">{snippet}</p>}</div></div></td><td>{document.nodeType === 'directory' ? t('document.folder') : document.type}</td><td>{document.sizeLabel}</td><td>{document.updatedLabel}</td><td>{searchMode === 'ai' ? <span className="ai-score">{score.toFixed(2)}</span> : <span className={`doc-status ${document.status}`}><i />{statusLabel(document)}</span>}</td><td className="row-actions">{renderQuickActions(document, 15)}</td></tr>)}</tbody></table></div> : <div className="document-grid">{activeRows.map(({ document, score, snippet }) => <div key={document.uid} className={`document-card ${selected.includes(document.uid) ? 'selected' : ''}`} onClick={() => void openDocument(document)}><button className={`checkbox card-select ${selected.includes(document.uid) ? 'checked' : ''}`} onClick={(event) => { event.stopPropagation(); toggleSelected(document.uid) }}>{selected.includes(document.uid) && <Icon name="check" size={11} />}</button><button className={`star-toggle card-star ${document.starred ? 'active' : ''}`} disabled={mutating || view === 'trash'} title={t(document.starred ? 'document.unstar' : 'document.star')} onClick={(event) => { event.stopPropagation(); void toggleStar(document) }}>★</button><div className="card-top"><span className={`file-type ${document.type.toLowerCase()}`}>{document.nodeType === 'directory' ? 'D' : document.type.slice(0, 1)}</span></div><div className="card-name" title={document.name}>{document.name}</div>{searchMode === 'ai' ? <p className="ai-snippet">{snippet}</p> : <div className="card-meta"><span>{document.nodeType === 'directory' ? t('document.folder') : document.type}</span><span>·</span><span>{document.sizeLabel}</span></div>}{searchMode === 'ai' ? <span className="ai-score">{score.toFixed(2)}</span> : <span className={`doc-status ${document.status}`}><i />{statusLabel(document)}</span>}<div className="card-actions">{renderQuickActions(document, 14)}</div></div>)}</div>) : <AsyncState kind={activeState} onRetry={activeState === 'error' ? () => void (searchMode === 'ai' ? runAiSearch() : loadDocuments()) : undefined} />}
+      {searchMode === 'ai' && !aiSearched ? <div className="async-state empty" role="status"><span><Icon name="sparkles" /></span><strong>{t('document.aiSearchIdleTitle')}</strong><p>{t('document.aiSearchIdleDescription')}</p></div> : activeState === 'ready' ? (layoutMode === 'list' ? <div className="document-table-wrap"><table className="document-table"><thead><tr><th className="check-cell"></th><th className="check-cell"></th><th>{t('document.column.document')}</th><th>{t('document.column.type')}</th><th>{t('document.column.size')}</th><th>{t('document.column.updated')}</th><th>{t('document.column.status')}</th><th></th></tr></thead><tbody>{activeRows.map(({ document, score, snippet }) => <tr key={document.uid} className="document-row" onClick={() => void openDocument(document)}><td className="check-cell"><button className={`checkbox ${selected.includes(document.uid) ? 'checked' : ''}`} onClick={(event) => { event.stopPropagation(); toggleSelected(document.uid) }}>{selected.includes(document.uid) && <Icon name="check" size={13} />}</button></td><td className="check-cell"><button className={`star-toggle ${document.starred ? 'active' : ''}`} disabled={mutating || view === 'trash'} title={t(document.starred ? 'document.unstar' : 'document.star')} onClick={(event) => { event.stopPropagation(); void toggleStar(document) }}>★</button></td><td><div className="document-name"><span className={`file-type ${document.type.toLowerCase()}`}>{document.nodeType === 'directory' ? <Icon name="folder" size={13} /> : document.type.slice(0, 1)}</span><div><strong>{document.name}</strong>{document.nodeType === 'directory' && <small>{document.path}</small>}{searchMode === 'ai' && <p className="ai-snippet">{snippet}</p>}</div></div></td><td>{document.nodeType === 'directory' ? t('document.folder') : document.type}</td><td>{document.sizeLabel}</td><td>{document.updatedLabel}</td><td>{searchMode === 'ai' ? <span className="ai-score">{score.toFixed(2)}</span> : <span className={`doc-status ${document.status}`}><i />{statusLabel(document)}</span>}</td><td className="row-actions">{renderQuickActions(document, 15)}</td></tr>)}</tbody></table></div> : <div className="document-grid">{activeRows.map(({ document, score, snippet }) => <div key={document.uid} className={`document-card ${selected.includes(document.uid) ? 'selected' : ''}`} onClick={() => void openDocument(document)}><button className={`checkbox card-select ${selected.includes(document.uid) ? 'checked' : ''}`} onClick={(event) => { event.stopPropagation(); toggleSelected(document.uid) }}>{selected.includes(document.uid) && <Icon name="check" size={11} />}</button><button className={`star-toggle card-star ${document.starred ? 'active' : ''}`} disabled={mutating || view === 'trash'} title={t(document.starred ? 'document.unstar' : 'document.star')} onClick={(event) => { event.stopPropagation(); void toggleStar(document) }}>★</button><div className="card-top"><span className={`file-type ${document.type.toLowerCase()}`}>{document.nodeType === 'directory' ? <Icon name="folder" size={13} /> : document.type.slice(0, 1)}</span></div><div className="card-name" title={document.name}>{document.name}</div>{searchMode === 'ai' ? <p className="ai-snippet">{snippet}</p> : <div className="card-meta"><span>{document.nodeType === 'directory' ? t('document.folder') : document.type}</span><span>·</span><span>{document.sizeLabel}</span></div>}{searchMode === 'ai' ? <span className="ai-score">{score.toFixed(2)}</span> : <span className={`doc-status ${document.status}`}><i />{statusLabel(document)}</span>}<div className="card-actions">{renderQuickActions(document, 14)}</div></div>)}</div>) : <AsyncState kind={activeState} onRetry={activeState === 'error' ? () => void (searchMode === 'ai' ? runAiSearch() : loadDocuments()) : undefined} />}
       <div className="table-footer"><span>{searchMode === 'ai' ? t('document.aiResultCount', { count: aiRows.length }) : t('document.displayed', { count: rows.length, total: result?.total ?? 0 })}</span>{searchMode === 'normal' && <div><button disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>{t('pagination.previous')}</button><button className="active">{page}</button><button disabled={!result?.hasNext} onClick={() => setPage((current) => current + 1)}>{t('pagination.next')}</button></div>}</div>
     </section>
-    {uploadOpen && <UploadDialog parentUid={folderUid} onClose={() => setUploadOpen(false)} onComplete={async () => { setUploadOpen(false); setNotice({ kind: 'success', message: t('upload.success'), errors: [] }); await refreshAfterMutation() }} />}
+    {uploadOpen && <UploadDialog parentUid={folderUid} onClose={() => setUploadOpen(false)} onComplete={async (errors, duplicates) => {
+      setUploadOpen(false)
+      if (errors.length) {
+        setNotice({ kind: 'error', message: t('upload.partialFailure'), errors: [...errors, ...duplicates] })
+      } else if (duplicates.length) {
+        setNotice({ kind: 'warning', message: t('upload.duplicatesNoted'), errors: duplicates })
+      } else {
+        setNotice({ kind: 'success', message: t('upload.success'), errors: [] })
+      }
+      await refreshAfterMutation()
+    }} />}
     {createFolderOpen && <CreateFolderDialog parentUid={folderUid} onClose={() => setCreateFolderOpen(false)} onComplete={async () => { setCreateFolderOpen(false); setNotice({ kind: 'success', message: t('document.mutationSuccess', { count: 1 }), errors: [] }); await refreshAfterMutation() }} />}
     {moveOpen && <MoveDialog count={selected.length} onClose={() => setMoveOpen(false)} onMove={async (parentUid) => { const completed = await applyMutation(() => workspaceApi.moveDocuments(selected, parentUid)); if (completed) setMoveOpen(false) }} />}
-    {detailDocument && <DocumentDetailDrawer document={detailDocument} parsedText={parsedText} loading={detailLoading} busy={mutating} onClose={closeDocument} onShare={() => setShareOpen(true)} onSearch={() => { closeDocument(); onSearch() }} onAsk={() => { closeDocument(); onAsk() }} onRename={() => void renameDocument(detailDocument)} onRetry={() => void retryDocument(detailDocument)} onToggleAi={() => void toggleAi(detailDocument)} onTrash={() => void applyMutation(() => workspaceApi.trashDocuments([detailDocument.uid]))} onRestore={() => void applyMutation(() => workspaceApi.restoreDocuments([detailDocument.uid]))} onPermanentDelete={() => { if (window.confirm(t('document.confirmPermanentDelete'))) void applyMutation(() => workspaceApi.permanentlyDeleteDocuments([detailDocument.uid])) }} />}
+    {detailDocument && <DocumentDetailDrawer document={detailDocument} parsedText={parsedText} loading={detailLoading} busy={mutating} onClose={closeDocument} onShare={() => setShareOpen(true)} onSearch={() => { closeDocument(); onSearch() }} onAsk={() => { closeDocument(); onAsk() }} onRename={() => void renameDocument(detailDocument)} onRetry={() => void retryDocument(detailDocument)} onToggleAi={() => void toggleAi(detailDocument)} onTrash={() => setTrashConfirm({ uids: [detailDocument.uid] })} onRestore={() => void applyMutation(() => workspaceApi.restoreDocuments([detailDocument.uid]))} onPermanentDelete={() => { if (window.confirm(t('document.confirmPermanentDelete'))) void applyMutation(() => workspaceApi.permanentlyDeleteDocuments([detailDocument.uid])) }} />}
     {detailDocument && shareOpen && <ShareDialog document={detailDocument} onClose={() => setShareOpen(false)} />}
+    {trashConfirm && <ConfirmDialog
+      title={t('document.confirmTrashTitle')}
+      description={t('document.confirmTrash')}
+      confirmLabel={t('detail.trash')}
+      danger
+      busy={mutating}
+      onConfirm={() => void confirmTrash()}
+      onCancel={() => setTrashConfirm(null)}
+    />}
   </>
 }
 
 function DocumentDetailDrawer({ document, parsedText, loading, busy, onClose, onShare, onSearch, onAsk, onRename, onRetry, onToggleAi, onTrash, onRestore, onPermanentDelete }: { document: DocumentSummary; parsedText: string | null; loading: boolean; busy: boolean; onClose: () => void; onShare: () => void; onSearch: () => void; onAsk: () => void; onRename: () => void; onRetry: () => void; onToggleAi: () => void; onTrash: () => void; onRestore: () => void; onPermanentDelete: () => void }) {
   const { t } = useI18n()
   const processing = document.status === 'processing'
-  const failed = document.status === 'failed'
+  const failed = document.status === 'failed' || document.status === 'stale'
   const disabled = document.status === 'disabled'
   const status = failed
     ? t('document.failed')
@@ -512,30 +554,64 @@ function ShareDialog({ document, onClose }: { document: DocumentSummary; onClose
   return <div className="modal-backdrop share-backdrop" onMouseDown={onClose}><div className="share-dialog" onMouseDown={(event) => event.stopPropagation()}><div className="dialog-head"><div><h2>{t('share.title')} <span className="future-badge">{t('future.badge')}</span></h2><p>{document.name}</p></div><button onClick={onClose}><Icon name="x" /></button></div><div className="share-scope-note"><Icon name="database" size={16} /><span><strong>{t('share.serverOnly')}</strong><small>{t('share.planned')}</small></span></div><label className="share-invite"><span>{t('share.addPerson')}</span><div><input disabled placeholder={t('share.searchAccount')} /><button className="primary-button" disabled>{t('share.add')}</button></div></label><div className="share-people"><span className="share-label">{t('share.people')}</span><div className="share-person"><span className="share-avatar">GR</span><div><strong>Grey</strong><small>grey@local · {t('share.owner')}</small></div><span>{t('share.owner')}</span></div></div><div className="dialog-actions"><button className="primary-button" onClick={onClose}>{t('share.done')}</button></div></div></div>
 }
 
-function UploadDialog({ parentUid, onClose, onComplete }: { parentUid: string | null; onClose: () => void; onComplete: () => Promise<void> | void }) {
+function UploadDialog({ parentUid, onClose, onComplete }: { parentUid: string | null; onClose: () => void; onComplete: (errors: string[], duplicates: string[]) => Promise<void> | void }) {
   const { t } = useI18n()
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [aiProcessingEnabled, setAiProcessingEnabled] = useState(true)
   const [progress, setProgress] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  function addFiles(list: FileList | null) {
+    if (!list || !list.length) return
+    setFiles((current) => [...current, ...Array.from(list)])
+  }
+
+  function removeFile(index: number) {
+    setFiles((current) => current.filter((_, position) => position !== index))
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!file) return
+    if (!files.length) return
     setBusy(true)
     setError(null)
-    try {
-      await workspaceApi.uploadDocument(file, { parentUid, aiProcessingEnabled, onProgress: setProgress })
-      await onComplete()
-    } catch (caught) {
-      setError(mutationErrors(caught).join(' '))
-    } finally {
-      setBusy(false)
+    setProgress(0)
+    const uploadErrors: string[] = []
+    const duplicateNotices: string[] = []
+    for (let index = 0; index < files.length; index += 1) {
+      const target = files[index]
+      try {
+        const result = await workspaceApi.uploadDocument(target, {
+          parentUid,
+          aiProcessingEnabled,
+          onProgress: (percent) => setProgress(Math.round(((index + percent / 100) / files.length) * 100)),
+        })
+        if (result.document.name !== target.name) duplicateNotices.push(t('upload.renamedForDuplicate', { name: target.name, renamed: result.document.name }))
+        else if (result.status === 'duplicate') duplicateNotices.push(t('upload.duplicateContentNotice', { name: target.name }))
+      } catch (caught) {
+        uploadErrors.push(`${target.name}: ${mutationErrors(caught).join(' ')}`)
+      }
     }
+    setBusy(false)
+    if (uploadErrors.length && uploadErrors.length === files.length) {
+      setError(uploadErrors.join(' '))
+      return
+    }
+    await onComplete(uploadErrors, duplicateNotices)
   }
 
-  return <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}><form className="upload-dialog" onSubmit={(event) => void submit(event)} onMouseDown={(event) => event.stopPropagation()}><div className="dialog-head"><div><h2>{t('document.add')}</h2><p>{t('upload.description')}</p></div><button type="button" disabled={busy} onClick={onClose}><Icon name="x" /></button></div><label className="drop-zone"><input type="file" disabled={busy} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span><Icon name="upload" size={23} /></span><strong>{file ? t('upload.chooseFile', { name: file.name }) : t('upload.drop')}</strong><p>{t('upload.orChoose')}</p></label><label className="upload-ai-option"><input type="checkbox" checked={aiProcessingEnabled} disabled={busy} onChange={(event) => setAiProcessingEnabled(event.target.checked)} />{t('upload.aiProcessing')}</label>{busy && <div className="upload-progress"><span style={{ width: `${progress}%` }} /><small>{t('upload.progress', { percent: progress })}</small></div>}{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t('upload.cancel')}</button><button type="submit" className="primary-button" disabled={!file || busy}>{t('upload.submit')}</button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}><form className="upload-dialog" onSubmit={(event) => void submit(event)} onMouseDown={(event) => event.stopPropagation()}><div className="dialog-head"><div><h2>{t('document.add')}</h2><p>{t('upload.description')}</p></div><button type="button" disabled={busy} onClick={onClose}><Icon name="x" /></button></div><label
+      className={`drop-zone ${dragActive ? 'active' : ''}`}
+      onDragOver={(event) => { event.preventDefault(); if (!busy) setDragActive(true) }}
+      onDragLeave={(event) => { event.preventDefault(); setDragActive(false) }}
+      onDrop={(event) => {
+        event.preventDefault()
+        setDragActive(false)
+        if (!busy) addFiles(event.dataTransfer.files)
+      }}
+    ><input type="file" multiple disabled={busy} onChange={(event) => { addFiles(event.target.files); event.target.value = '' }} /><span><Icon name="upload" size={23} /></span><strong>{files.length ? t('upload.chosenCount', { count: files.length }) : t('upload.drop')}</strong><p>{t('upload.orChoose')}</p></label>{files.length > 0 && <ul className="upload-file-list">{files.map((target, index) => <li key={`${target.name}-${index}`}><span>{target.name}</span>{!busy && <button type="button" onClick={() => removeFile(index)} aria-label={t('upload.remove')}><Icon name="x" size={12} /></button>}</li>)}</ul>}<label className="upload-ai-option"><input type="checkbox" checked={aiProcessingEnabled} disabled={busy} onChange={(event) => setAiProcessingEnabled(event.target.checked)} />{t('upload.aiProcessing')}</label>{busy && <div className="upload-progress"><span style={{ width: `${progress}%` }} /><small>{t('upload.progress', { percent: progress })}</small></div>}{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t('upload.cancel')}</button><button type="submit" className="primary-button" disabled={!files.length || busy}>{t('upload.submit')}</button></div></form></div>
 }
 
 function CreateFolderDialog({ parentUid, onClose, onComplete }: { parentUid: string | null; onClose: () => void; onComplete: () => Promise<void> | void }) {
@@ -588,4 +664,9 @@ function MoveDialog({ count, onClose, onMove }: { count: number; onClose: () => 
   }
 
   return <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}><form className="compact-dialog" onSubmit={(event) => void submit(event)} onMouseDown={(event) => event.stopPropagation()}><div className="dialog-head"><div><h2>{t('move.title')}</h2><p>{t('move.description', { count })}</p></div><button type="button" disabled={busy} onClick={onClose}><Icon name="x" /></button></div><label className="dialog-field"><span>{t('move.destination')}</span><select value={destination} disabled={busy} onChange={(event) => setDestination(event.target.value)}><option value="root">{t('move.root')}</option>{folders.map((folder) => <option key={folder.uid} value={folder.uid}>{folder.path}</option>)}</select></label>{error && <p className="dialog-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>{t('upload.cancel')}</button><button type="submit" className="primary-button" disabled={busy}>{t('move.submit')}</button></div></form></div>
+}
+
+function ConfirmDialog({ title, description, confirmLabel, danger, busy, onConfirm, onCancel }: { title: string; description: string; confirmLabel: string; danger?: boolean; busy?: boolean; onConfirm: () => void; onCancel: () => void }) {
+  const { t } = useI18n()
+  return <div className="modal-backdrop" onMouseDown={busy ? undefined : onCancel}><div className="compact-dialog" onMouseDown={(event) => event.stopPropagation()}><div className="dialog-head"><div><h2>{title}</h2><p>{description}</p></div><button type="button" disabled={busy} onClick={onCancel}><Icon name="x" /></button></div><div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onCancel}>{t('upload.cancel')}</button><button type="button" className={`primary-button${danger ? ' danger' : ''}`} disabled={busy} onClick={onConfirm}>{confirmLabel}</button></div></div></div>
 }

@@ -7,7 +7,7 @@
 """
 
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from celery.exceptions import Retry
@@ -18,16 +18,21 @@ from django.utils import timezone
 
 from config.enums import AIStatus, NodeType
 from document_ai.models import ChunkEmbedding, DocumentChunk, DocumentParseResult
-from document_ai.processing.embedding import enqueue_embedding_tasks_sync
+from document_ai.embedding.executor import (
+    EmbeddingDispatchError,
+    embed_document_chunks_batch_sync,
+    enqueue_embedding_tasks_sync,
+)
+from document_ai.processing.recovery import (
+    get_embedding_recovery_chunk_ids,
+    get_node_ids_for_chunks,
+    get_parse_recovery_node_ids,
+)
 from document_ai.tasks import (
     _embedding_queue_backpressure,
     embedding_document_with_bge,
     embedding_document_batch_with_bge,
     enqueue_embedding_tasks,
-    _get_embedding_recovery_chunk_ids,
-    _get_node_ids_for_chunks,
-    _get_parse_recovery_node_ids,
-    _try_acquire_recovery_lock,
     recover_document_pipeline_backlog,
     parse_document_with_docling,
 )
@@ -56,7 +61,7 @@ class DocumentPipelineRecoveryTests(TestCase):
             ext=".txt",
             node_type=NodeType.FILE,
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=node,
                 original_name=name,
@@ -113,7 +118,7 @@ class DocumentPipelineRecoveryTests(TestCase):
             chunk_count=0,
         )
 
-        node_ids = _get_parse_recovery_node_ids(limit=1000)
+        node_ids = get_parse_recovery_node_ids(limit=1000)
 
         self.assertIn(missing_parse_node.id, node_ids)
         self.assertIn(stale_failed_node.id, node_ids)
@@ -150,8 +155,6 @@ class DocumentPipelineRecoveryTests(TestCase):
         )
         ChunkEmbedding.objects.create(
             chunk=completed_chunk,
-            model_name="BAAI/bge-m3",
-            model_version="bgem3_hybrid",
             sparse_vector={"1": 1.0},
             status=AIStatus.COMPLETED,
         )
@@ -159,7 +162,7 @@ class DocumentPipelineRecoveryTests(TestCase):
         old_time = timezone.now() - timedelta(hours=1)
         DocumentChunk.objects.filter(id__in=[stale_pending.id, stale_failed.id]).update(created_at=old_time)
 
-        chunk_ids = _get_embedding_recovery_chunk_ids(limit=1000)
+        chunk_ids = get_embedding_recovery_chunk_ids(limit=1000)
 
         self.assertIn(stale_pending.id, chunk_ids)
         self.assertIn(stale_failed.id, chunk_ids)
@@ -181,11 +184,11 @@ class DocumentPipelineRecoveryTests(TestCase):
             status=AIStatus.PENDING,
         )
 
-        with patch("document_ai.tasks.embedding_document_with_bge.apply_async") as apply_async:
-            result = enqueue_embedding_tasks(node.id)
+        with patch("document_ai.orchestration.enqueue_embedding_batch") as dispatch_batch:
+            result = enqueue_embedding_tasks_sync(node.id)
 
         chunk.refresh_from_db()
-        apply_async.assert_not_called()
+        dispatch_batch.assert_not_called()
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(chunk.status, AIStatus.PENDING)
 
@@ -193,13 +196,33 @@ class DocumentPipelineRecoveryTests(TestCase):
         envelope = enqueue_kwargs(trace_id="trace-envelope-test")
 
         with patch(
-            "document_ai.processing.embedding.enqueue_embedding_tasks_sync",
-            return_value={"status": "success", "node_id": 123, "chunk_count": 0},
-        ) as enqueue_sync:
+            "document_ai.services.executor_transport.dispatch_executor_job",
+            return_value={"result": {"status": "success", "node_id": 123, "chunk_count": 0}},
+        ) as dispatch:
             result = enqueue_embedding_tasks.run(123, **envelope)
 
         self.assertEqual(result["status"], "success")
-        enqueue_sync.assert_called_once_with(123, trace_id="trace-envelope-test")
+        self.assertEqual(dispatch.call_args.kwargs["payload"], {"node_id": 123})
+        self.assertEqual(dispatch.call_args.kwargs["envelope"]["trace_id"], "trace-envelope-test")
+
+    def test_enqueue_embedding_task_retries_batch_publish_failure(self):
+        failure = EmbeddingDispatchError(
+            "broker unavailable",
+            unpublished_chunk_ids=[10, 11],
+        )
+        from document_ai.services.executor_transport import ExecutorDispatchError
+        with patch(
+            "document_ai.services.executor_transport.dispatch_executor_job",
+            side_effect=ExecutorDispatchError(str(failure)),
+        ), patch.object(
+            enqueue_embedding_tasks,
+            "retry",
+            side_effect=Retry(),
+        ) as retry:
+            with self.assertRaises(Retry):
+                enqueue_embedding_tasks.run(123, trace_id="trace-retry")
+
+        self.assertIn("broker unavailable", str(retry.call_args.kwargs["exc"]))
 
     def test_embedding_task_skips_ai_disabled_node_before_model_call(self):
         node = self._create_file_node("ai-disabled-embed.txt")
@@ -218,7 +241,7 @@ class DocumentPipelineRecoveryTests(TestCase):
         )
 
         with patch("document_ai.embedding.embeding_models.embed_document") as embed_document:
-            result = embedding_document_with_bge.run(chunk.id)
+            result = embed_document_chunks_batch_sync([chunk.id])
 
         chunk.refresh_from_db()
         embed_document.assert_not_called()
@@ -244,12 +267,12 @@ class DocumentPipelineRecoveryTests(TestCase):
         )
         DocumentChunk.objects.filter(pk=failed_chunk.pk).update(created_at=timezone.now() - timedelta(hours=1))
 
-        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
-            "document_ai.tasks._get_embedding_recovery_chunk_ids",
+        with patch("document_ai.processing.recovery.get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.processing.recovery.get_embedding_recovery_chunk_ids",
             return_value=[failed_chunk.id],
-        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.tasks.enqueue_embedding_tasks.delay"
-        ) as enqueue_delay, patch("document_ai.tasks._redis_client") as mock_redis_ctor:
+        ), patch("document_ai.processing.recovery.enqueue_parse") as parse_delay, patch(
+            "document_ai.processing.recovery.enqueue_embedding"
+        ) as enqueue_delay, patch("document_ai.processing.recovery.recovery_redis_client") as mock_redis_ctor:
             # Redis 락 항상 성공 (중복 없음)
             mock_redis_ctor.return_value.set.return_value = True
             result = recover_document_pipeline_backlog()
@@ -288,12 +311,12 @@ class DocumentPipelineRecoveryTests(TestCase):
             parse_result=parse_result, chunk_index=1, text="b", status=AIStatus.FAILED
         )
 
-        node_ids = _get_node_ids_for_chunks([chunk_a.id, chunk_b.id])
+        node_ids = get_node_ids_for_chunks([chunk_a.id, chunk_b.id])
 
         self.assertEqual(node_ids, [node.id])
 
     def test_get_node_ids_for_chunks_empty_input(self):
-        node_ids = _get_node_ids_for_chunks([])
+        node_ids = get_node_ids_for_chunks([])
         self.assertEqual(node_ids, [])
 
     def test_recovery_task_skips_nodes_when_redis_lock_already_held(self):
@@ -318,18 +341,21 @@ class DocumentPipelineRecoveryTests(TestCase):
             created_at=timezone.now() - timedelta(hours=1)
         )
 
-        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
-            "document_ai.tasks._get_embedding_recovery_chunk_ids",
+        with patch("document_ai.processing.recovery.get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.processing.recovery.get_embedding_recovery_chunk_ids",
             return_value=[stale_chunk.id],
-        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.tasks.enqueue_embedding_tasks.delay"
-        ) as enqueue_delay, patch("document_ai.tasks._redis_client") as mock_redis_ctor:
+        ), patch("document_ai.processing.recovery.enqueue_parse") as parse_delay, patch(
+            "document_ai.processing.recovery.enqueue_embedding"
+        ) as enqueue_delay, patch("document_ai.processing.recovery.recovery_redis_client") as mock_redis_ctor:
             # Redis SET NX 실패 → 락이 이미 존재 (중복 큐잉 방지)
             mock_redis_ctor.return_value.set.return_value = None
             result = recover_document_pipeline_backlog()
 
         parse_delay.assert_not_called()
         enqueue_delay.assert_not_called()
+        stale_chunk.refresh_from_db()
+        self.assertEqual(stale_chunk.status, AIStatus.FAILED)
+        self.assertEqual(result["chunks_reset_to_pending"], 0)
         self.assertEqual(result["parse_requeued"], 0)
         self.assertEqual(result["parse_skipped_dedup"], 1)
         self.assertEqual(result["embedding_nodes_requeued"], 0)
@@ -357,13 +383,13 @@ class DocumentPipelineRecoveryTests(TestCase):
             created_at=timezone.now() - timedelta(hours=1)
         )
 
-        with patch("document_ai.tasks._get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
-            "document_ai.tasks._get_embedding_recovery_chunk_ids",
+        with patch("document_ai.processing.recovery.get_parse_recovery_node_ids", return_value=[parse_node.id]), patch(
+            "document_ai.processing.recovery.get_embedding_recovery_chunk_ids",
             return_value=[stale_chunk.id],
-        ), patch("document_ai.tasks.parse_document_with_docling.delay") as parse_delay, patch(
-            "document_ai.tasks.enqueue_embedding_tasks.delay"
+        ), patch("document_ai.processing.recovery.enqueue_parse") as parse_delay, patch(
+            "document_ai.processing.recovery.enqueue_embedding"
         ) as enqueue_delay, patch(
-            "document_ai.tasks._redis_client",
+            "document_ai.processing.recovery.recovery_redis_client",
             side_effect=Exception("connection refused"),
         ):
             result = recover_document_pipeline_backlog()
@@ -376,6 +402,56 @@ class DocumentPipelineRecoveryTests(TestCase):
         self.assertEqual(result["parse_requeued"], 1)
         self.assertEqual(result["embedding_nodes_requeued"], 1)
 
+    def test_recovery_task_falls_back_when_redis_set_fails_lazily(self):
+        """Redis clients connect lazily, so SET failures must also fail open."""
+        parse_node = self._create_file_node("lazy-redis-failure.txt")
+
+        with patch(
+            "document_ai.processing.recovery.get_parse_recovery_node_ids",
+            return_value=[parse_node.id],
+        ), patch(
+            "document_ai.processing.recovery.get_embedding_recovery_chunk_ids",
+            return_value=[],
+        ), patch("document_ai.processing.recovery.enqueue_parse") as enqueue_parse, patch(
+            "document_ai.processing.recovery.recovery_redis_client"
+        ) as redis_client:
+            redis_client.return_value.set.side_effect = ConnectionError("redis down")
+            result = recover_document_pipeline_backlog()
+
+        enqueue_parse.assert_called_once()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["parse_requeued"], 1)
+
+    def test_recovery_publish_failure_releases_lock_and_does_not_count_attempt(self):
+        parse_node = self._create_file_node("publish-failure.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=parse_node,
+            status=AIStatus.FAILED,
+            chunk_count=0,
+        )
+
+        with patch(
+            "document_ai.processing.recovery.get_parse_recovery_node_ids",
+            return_value=[parse_node.id],
+        ), patch(
+            "document_ai.processing.recovery.get_embedding_recovery_chunk_ids",
+            return_value=[],
+        ), patch(
+            "document_ai.processing.recovery.enqueue_parse",
+            side_effect=ConnectionError("broker publish failed"),
+        ), patch("document_ai.processing.recovery.recovery_redis_client") as redis_client:
+            redis_client.return_value.set.return_value = True
+            result = recover_document_pipeline_backlog()
+
+        parse_result.refresh_from_db()
+        redis_client.return_value.delete.assert_called_once_with(
+            f"recovery:parse:{parse_node.id}"
+        )
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["parse_requeued"], 0)
+        self.assertEqual(result["parse_publish_failed"], 1)
+        self.assertEqual(parse_result.recovery_attempts, 0)
+
     def test_parse_and_embedding_tasks_are_pinned_to_separate_queues(self):
         self.assertEqual(parse_document_with_docling.queue, "parse")
         self.assertEqual(enqueue_embedding_tasks.queue, "embed")
@@ -387,7 +463,7 @@ class DocumentPipelineRecoveryTests(TestCase):
         {"DOCUMENT_AI_EMBED_QUEUE_BACKPRESSURE_LIMIT": "3"},
     )
     def test_embedding_queue_depth_controls_parse_backpressure(self):
-        with patch("document_ai.tasks._redis_client") as redis_client:
+        with patch("document_ai.orchestration.broker_redis_client") as redis_client:
             redis_client.return_value.llen.return_value = 2
             self.assertEqual(_embedding_queue_backpressure(), (False, 2, 3))
 
@@ -427,15 +503,19 @@ class DocumentPipelineRecoveryTests(TestCase):
 
         with self.settings(
             EMBEDDING_DOCUMENT_BATCH_MAX_CHUNKS=2, EMBEDDING_DOCUMENT_BATCH_MAX_TOKENS=1000
-        ), patch("document_ai.tasks.embedding_document_batch_with_bge.apply_async") as apply_async:
-            result = enqueue_embedding_tasks_sync(node.id)
+        ):
+            dispatch_batch = Mock()
+            result = enqueue_embedding_tasks_sync(
+                node.id,
+                dispatch_batch=dispatch_batch,
+            )
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["chunk_count"], 3)
         # count cap of 2 -> chunks [0,1] in one task, [2] in a second task
         # instead of one task per chunk.
         dispatched_batches = sorted(
-            (call.kwargs["args"][0] for call in apply_async.call_args_list), key=lambda b: b[0]
+            (call.args[0] for call in dispatch_batch.call_args_list), key=lambda b: b[0]
         )
         self.assertEqual(
             dispatched_batches,
@@ -444,3 +524,36 @@ class DocumentPipelineRecoveryTests(TestCase):
         for chunk in chunks:
             chunk.refresh_from_db()
             self.assertEqual(chunk.status, AIStatus.PROCESSING)
+
+    def test_embedding_batch_publish_failure_releases_only_unpublished_chunks(self):
+        node = self._create_file_node("partial-publish.txt")
+        parse_result = DocumentParseResult.objects.create(
+            node=node, status=AIStatus.COMPLETED, chunk_count=3,
+        )
+        chunks = [
+            DocumentChunk.objects.create(
+                parse_result=parse_result,
+                chunk_index=index,
+                text=f"chunk {index}",
+                status=AIStatus.PENDING,
+                token_count=10,
+            )
+            for index in range(3)
+        ]
+        dispatch_batch = Mock(side_effect=[None, ConnectionError("broker down")])
+
+        with self.settings(
+            EMBEDDING_DOCUMENT_BATCH_MAX_CHUNKS=2,
+            EMBEDDING_DOCUMENT_BATCH_MAX_TOKENS=1000,
+        ), self.assertRaises(EmbeddingDispatchError) as raised:
+            enqueue_embedding_tasks_sync(
+                node.id,
+                dispatch_batch=dispatch_batch,
+            )
+
+        for chunk in chunks:
+            chunk.refresh_from_db()
+        self.assertEqual(chunks[0].status, AIStatus.PROCESSING)
+        self.assertEqual(chunks[1].status, AIStatus.PROCESSING)
+        self.assertEqual(chunks[2].status, AIStatus.PENDING)
+        self.assertEqual(raised.exception.unpublished_chunk_ids, [chunks[2].id])

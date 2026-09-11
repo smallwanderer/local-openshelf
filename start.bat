@@ -31,22 +31,24 @@ echo   [1] Install / Setup Wizard   (first run or reconfigure)
 echo   [2] Start / Resume Dotori     (no rebuild)
 echo   [3] Stop / Pause Dotori       (preserve containers and cache)
 echo   [4] Change LLM Model
-echo   [5] Show Server Status
-echo   [6] Maintenance
-echo   [7] Advanced Network Settings
-echo   [8] Exit
+echo   [5] Change Embedding Model
+echo   [6] Show Server Status
+echo   [7] Maintenance
+echo   [8] Advanced Network Settings
+echo   [9] Exit
 echo ============================================================
 set "choice="
-set /p choice="Select an option (1-8): "
+set /p choice="Select an option (1-9): "
 
 if "%choice%"=="1" goto install
 if "%choice%"=="2" goto run
 if "%choice%"=="3" goto stop
 if "%choice%"=="4" goto change_llm
-if "%choice%"=="5" goto status
-if "%choice%"=="6" goto maintenance_menu
-if "%choice%"=="7" goto network_menu
-if "%choice%"=="8" exit /b
+if "%choice%"=="5" goto change_embedding
+if "%choice%"=="6" goto status
+if "%choice%"=="7" goto maintenance_menu
+if "%choice%"=="8" goto network_menu
+if "%choice%"=="9" exit /b
 echo.
 echo [ERROR] Invalid option: %choice%
 pause
@@ -77,6 +79,14 @@ if %errorlevel% neq 0 (
 pause
 goto menu
 
+:change_embedding
+python install.py --change-embedding
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to change the embedding model.
+)
+pause
+goto menu
+
 :stop
 python install.py --stop
 if %errorlevel% neq 0 (
@@ -100,17 +110,19 @@ echo   [2] Rebuild and Restart         (application + LLM runtime)
 echo   [3] Full Shutdown               (remove containers, keep data/cache)
 echo   [4] Remove LLM Runtime and Model Cache
 echo   [5] Toggle Login Requirement
-echo   [6] Back
+echo   [6] Change Embedding Model
+echo   [7] Back
 echo ============================================================
 set "maintenance_choice="
-set /p maintenance_choice="Select an option (1-6): "
+set /p maintenance_choice="Select an option (1-7): "
 
 if "%maintenance_choice%"=="1" goto restart
 if "%maintenance_choice%"=="2" goto rebuild
 if "%maintenance_choice%"=="3" goto shutdown
 if "%maintenance_choice%"=="4" goto remove_llm
 if "%maintenance_choice%"=="5" goto toggle_login
-if "%maintenance_choice%"=="6" goto menu
+if "%maintenance_choice%"=="6" goto change_embedding
+if "%maintenance_choice%"=="7" goto menu
 echo.
 echo [ERROR] Invalid option: %maintenance_choice%
 pause

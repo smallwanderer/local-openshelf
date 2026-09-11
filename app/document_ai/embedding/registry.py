@@ -22,10 +22,10 @@ _PROVIDER_FACTORIES = {
 
 
 def _is_embedding_model_process() -> bool:
-    # Only the gunicorn worker dotori-document boots as its model owner sets
-    # this (see docker-compose.yml). dotori-document's own Celery worker does
-    # NOT set it -- it proxies through the same /embed endpoint as app, so the
-    # model is loaded in exactly one OS process, not one per process.
+    # Only the gunicorn worker embedding-executor boots as its model owner sets
+    # this (see docker-compose.yml). app and dotori-orchestrator do not set it
+    # and proxy through the same /embed endpoint, so the model is loaded in
+    # exactly one OS process.
     return os.getenv("DOTORI_EMBEDDING_MODEL_PROCESS") == "1"
 
 
@@ -48,14 +48,9 @@ def get_embedding_provider(
     except KeyError as exc:
         raise ValueError(f"Unsupported embedding backend: {resolved_backend}") from exc
 
-    # Local in-process models must load in exactly one process (dotori-document's
-    # model-owning gunicorn worker). Every other process (app, Celery workers)
-    # gets a proxy that calls out to it over HTTP.
-    # External API providers (e.g. openai_compatible) make outbound HTTP calls directly.
-    local_backends = (
-        BGEM3HybridProvider.backend,
-        SentenceTransformersEmbeddingProvider.backend,
-    )
+    # Only the model-owning executor may construct a provider. This applies to
+    # external providers too: query and document calls then share the same
+    # admission queue, timeout policy, and server-wide runtime contract.
     model_revision = (
         getattr(resolved_runtime, "model_revision", "")
         if resolved_model == getattr(resolved_runtime, "model_id", None)
@@ -65,7 +60,7 @@ def get_embedding_provider(
     query_prefix = getattr(resolved_runtime, "query_prefix", "")
     document_prefix = getattr(resolved_runtime, "document_prefix", "")
 
-    if resolved_backend in local_backends and not _is_embedding_model_process():
+    if not _is_embedding_model_process():
         supports_sparse = getattr(
             resolved_runtime,
             "supports_sparse",

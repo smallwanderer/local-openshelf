@@ -51,7 +51,13 @@ export interface OperationsStatus {
   services: Record<'app' | 'database' | 'embedding' | 'rag', ServiceStatus>
   processing: {
     parse: { counts: Record<string, number>; stale_count: number; unit: string }
-    embedding: { counts: Record<string, number>; stale_count: number; unit: string }
+    embedding: {
+      counts: Record<string, number>
+      stale_count: number
+      contract_mismatch_count: number
+      active_generation_id: string
+      unit: string
+    }
     recent_failures: Array<{
       pipeline: string
       record_id: number

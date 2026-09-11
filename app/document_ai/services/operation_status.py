@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from config.enums import AIStatus
 from document_ai.models import DocumentChunk, DocumentParseResult
+from document_ai.services.embedding_runtime_config import get_active_embedding_runtime
 from document_ai.services.operation_metrics import _safe_error_summary
 from document_ai.services.server_policy import build_server_policy_payload
 
@@ -42,6 +43,8 @@ def _database_status() -> dict:
 
 
 def _processing_status() -> dict:
+    active_runtime = get_active_embedding_runtime()
+    active_generation_id = active_runtime.generation_id
     parse_counts = _status_counts(DocumentParseResult.objects.all())
     embedding_counts = _status_counts(DocumentChunk.objects.all())
     stale_before = timezone.now() - timedelta(
@@ -53,6 +56,17 @@ def _processing_status() -> dict:
     embedding_stale = DocumentChunk.objects.filter(
         status__in=[AIStatus.PENDING, AIStatus.PROCESSING], updated_at__lt=stale_before
     ).count()
+    embedding_contract_mismatch = (
+        DocumentChunk.objects.filter(
+            status=AIStatus.COMPLETED,
+        )
+        .exclude(parse_result__embedding_generation_id="")
+        .exclude(
+            parse_result__embedding_generation_id=active_generation_id,
+            parse_result__embedding_runtime_fingerprint=active_runtime.runtime_fingerprint,
+        )
+        .count()
+    )
 
     failures = []
     for row in DocumentParseResult.objects.filter(status=AIStatus.FAILED).select_related("node").order_by("-updated_at")[:5]:
@@ -82,7 +96,13 @@ def _processing_status() -> dict:
     failures.sort(key=lambda row: row["failed_at"], reverse=True)
     return {
         "parse": {"counts": parse_counts, "stale_count": parse_stale, "unit": "documents"},
-        "embedding": {"counts": embedding_counts, "stale_count": embedding_stale, "unit": "chunks"},
+        "embedding": {
+            "counts": embedding_counts,
+            "stale_count": embedding_stale,
+            "contract_mismatch_count": embedding_contract_mismatch,
+            "active_generation_id": active_generation_id,
+            "unit": "chunks",
+        },
         "recent_failures": failures[:5],
     }
 

@@ -201,7 +201,7 @@ class WorkspaceQualityProfileRevision(models.Model):
     version = models.PositiveIntegerField()
     revision = models.PositiveIntegerField(default=1)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, db_index=True)
-    change_axis = models.CharField(max_length=16, choices=AXIS_CHOICES, null=True, blank=True)
+    changed_axes = models.JSONField(default=list, blank=True)
     schema_version = models.PositiveIntegerField(default=1)
     retrieval_config = models.JSONField(default=dict, blank=True)
     generation_config = models.JSONField(default=dict, blank=True)
@@ -243,10 +243,6 @@ class WorkspaceQualityProfileRevision(models.Model):
                 fields=["workspace"],
                 condition=models.Q(status="draft"),
                 name="uniq_draft_quality_profile_workspace",
-            ),
-            models.CheckConstraint(
-                condition=~models.Q(status="draft") | models.Q(change_axis__isnull=False),
-                name="draft_quality_profile_requires_axis",
             ),
         ]
 

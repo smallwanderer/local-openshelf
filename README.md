@@ -6,7 +6,7 @@ Dotori is a self-hosted document workspace for document management, hybrid searc
   <img src="https://github.com/user-attachments/assets/54c7a4a6-39cd-49f9-b5ad-99fe4b24a438" width="80%" alt="Dotori document workspace">
 </p>
 
-For Korean documentation, see [README.ko.md](README.ko.md). For detailed installation and operations, see the [installation guide](documents/installation-guide.md).
+For Korean documentation, see [README.ko.md](README.ko.md). For the full documentation set (installation, operations, monitoring, API), start at [documents/](documents/WALKTHROUGH.md).
 
 ## Key Features
 
@@ -18,6 +18,7 @@ For Korean documentation, see [README.ko.md](README.ko.md). For detailed install
 - Guided installation and use of a local LLM selected for the server's hardware
 - Three installation modes, from file management only to a complete local RAG stack
 - Korean and English web interfaces, with support for external AI models
+- Optional external, OpenAI-compatible embedding endpoints (OpenAI, vLLM, Ollama, or a custom server) in place of the local BGE-M3 model
 
 > [!CAUTION]
 > The operator must select the local LLM. AI models and runtimes are managed as server-wide settings, not per-user settings.
@@ -58,7 +59,9 @@ Docker Desktop with the WSL2 backend is recommended on Windows.
         |                               |-- llama.cpp
         |                               `-- vLLM
         `-- Queue Server
-              `-- dotori-document  [parse, embed]
+              |-- parser-executor              [parse]
+              `-- embedding-executor-consumer [embed]
+                         `-- embedding-executor [HTTP model/backend]
 ```
 
 Only long-running parsing and embedding work is queued. Interactive search returns directly, and RAG answers stream over HTTP.
@@ -75,6 +78,7 @@ This is a design direction, not a completed feature. See the [API-centered serve
 - `.env.example` also contains controls for advanced features.
 - All files saved through Dotori are stored on the local server filesystem. Dotori does not currently provide a separate backup feature.
 - `data/config/llm_runtime.json` is generated during local RAG setup and serves as the server-wide source of truth for the selected runtime.
+- The embedding backend can be switched from the local BGE-M3 model to an external OpenAI-compatible endpoint through `.env` and `data/config/runtime_scopes/production/embedding_runtime.json`; see the [embedding guide](documents/embedding-guide.md) for supported vector dimensions and setup steps.
 
 ## Development
 

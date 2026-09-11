@@ -42,7 +42,12 @@ def _make_embedding_row(
     trashed: bool = False,
 ):
     node = SimpleNamespace(uid=uid, name=node_name, owner=owner, trashed=trashed, ext=ext)
-    parse_result = SimpleNamespace(id=parse_result_id, node=node, metadata={"file_ext": ext})
+    parse_result = SimpleNamespace(
+        id=parse_result_id,
+        node=node,
+        metadata={"file_ext": ext},
+        embedding_generation_id="legacy-bge-m3",
+    )
     chunk = SimpleNamespace(
         id=chunk_id,
         parse_result_id=parse_result_id,
@@ -52,6 +57,7 @@ def _make_embedding_row(
         page_from=1,
         page_to=1,
         parse_result=parse_result,
+        status=status,
     )
     return SimpleNamespace(
         chunk=chunk,
@@ -84,6 +90,14 @@ class FakeQuerySet:
                 ]
             elif key == "status":
                 filtered = [row for row in filtered if row.status == value]
+            elif key == "chunk__status":
+                filtered = [row for row in filtered if row.chunk.status == value]
+            elif key in {
+                "chunk__parse_result__embedding_generation_id",
+                "chunk__parse_result__embedding_runtime_fingerprint",
+            }:
+                # Fake rows represent the active in-place contract.
+                filtered = list(filtered)
             elif key == "model_version":
                 filtered = [row for row in filtered if row.model_version == value]
             elif key == "chunk__parse_result__node__owner":

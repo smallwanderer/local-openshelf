@@ -48,7 +48,7 @@ QUERY_DSL_SCHEMA_NOTUSING_NOW = {
     },
     "embedding": {
         "model": "document_ai.ChunkEmbedding",
-        "prefix": "parse_result__chunks__embeddings__",
+        "prefix": "parse_result__chunks__embedding__",
         "fields": {},
         "sortable_fields": set(),
     },

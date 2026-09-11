@@ -2,7 +2,7 @@ from django.contrib.auth.models import AbstractBaseUser
 from django.core.files.base import File
 from django.core.files.storage import default_storage
 from django.http import FileResponse
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 import dataclasses
 import os
@@ -25,6 +25,9 @@ ALLOWED_EXTENSIONS = {
     ".html",
 }
 MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+
+
+MAX_RENAME_ATTEMPTS = 200
 
 
 @dataclasses.dataclass
@@ -86,32 +89,45 @@ def validate_upload(workspace, owner: AbstractBaseUser, uploaded_file: File) -> 
     )
 
 
+def _name_candidates(name: str):
+    stem, ext = os.path.splitext(name)
+    yield name
+    for counter in range(1, MAX_RENAME_ATTEMPTS + 1):
+        yield f"{stem} ({counter}){ext}"
+
+
 def save_file(workspace, owner: AbstractBaseUser, file: File, description: str, parent=None, ai_processing_enabled: bool = True) -> Node:
     sha256 = calculate_sha256(file)
-    file.seek(0)
+    original_name = file.name
 
-    with transaction.atomic():
-        node = Node.objects.create(
-            workspace=workspace,
-            owner=owner,
-            parent=parent,
-            name=file.name,
-            ext=extract_ext(file.name),
-            node_type=NodeType.FILE,
-            description=description,
-            ai_processing_enabled=ai_processing_enabled,
-        )
+    for candidate_name in _name_candidates(original_name):
+        file.seek(0)
+        try:
+            with transaction.atomic():
+                node = Node.objects.create(
+                    workspace=workspace,
+                    owner=owner,
+                    parent=parent,
+                    name=candidate_name,
+                    ext=extract_ext(candidate_name),
+                    node_type=NodeType.FILE,
+                    description=description,
+                    ai_processing_enabled=ai_processing_enabled,
+                )
 
-        FileBlob.objects.create(
-            node=node,
-            file=file,
-            original_name=file.name,
-            size=file.size,
-            mime_type=getattr(file, "content_type", ""),
-            sha256=sha256,
-        )
+                FileBlob.objects.create(
+                    node=node,
+                    file=file,
+                    original_name=original_name,
+                    size=file.size,
+                    mime_type=getattr(file, "content_type", ""),
+                    sha256=sha256,
+                )
+        except IntegrityError:
+            continue
+        return node
 
-    return node
+    raise ValueError("Could not find an available name for this file.")
 
 
 def _coerce_node(file_or_node) -> Node:

@@ -18,7 +18,7 @@ from document_ai.models import (
     SearchJob,
     UserLLMPreference,
 )
-from document_ai.tasks import enqueue_embedding_tasks
+from document_ai.orchestration import enqueue_embedding
 from document_ai.tracing_utils import enqueue_kwargs
 
 
@@ -181,7 +181,7 @@ class DocumentChunkAdmin(admin.ModelAdmin):
 
     @admin.display(description="Embeddings")
     def embedding_count(self, obj):
-        return obj.embeddings.count()
+        return int(ChunkEmbedding.objects.filter(chunk=obj).exists())
 
     @admin.display(description="Text preview")
     def text_preview(self, obj):
@@ -201,7 +201,7 @@ class DocumentChunkAdmin(admin.ModelAdmin):
         node_ids = set(candidate_qs.values_list("parse_result__node_id", flat=True))
         updated = candidate_qs.update(status=AIStatus.PENDING, error_message={})
         for node_id in node_ids:
-            enqueue_embedding_tasks.delay(node_id, **enqueue_kwargs())
+            enqueue_embedding(node_id, **enqueue_kwargs())
         self.message_user(
             request,
             f"Queued embedding for {updated} chunks across {len(node_ids)} files.",
@@ -215,8 +215,6 @@ class ChunkEmbeddingAdmin(admin.ModelAdmin):
         "id",
         "node_name",
         "chunk_index",
-        "model_name",
-        "model_version",
         "status",
         "dense_dim",
         "sparse_terms",
@@ -225,16 +223,12 @@ class ChunkEmbeddingAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "status",
-        "model_name",
-        "model_version",
         "embedded_at",
         "created_at",
     )
     search_fields = (
         "chunk__parse_result__node__name",
         "chunk__parse_result__node__owner__email",
-        "model_name",
-        "model_version",
         "error_message",
     )
     readonly_fields = (

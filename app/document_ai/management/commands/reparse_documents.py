@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 
 from config.enums import NodeType
 from document_ai.tasks import parse_document_with_docling
+from document_ai.orchestration import enqueue_parse
 from document_ai.tracing_utils import enqueue_kwargs
 from files.models import Node
 
@@ -94,7 +95,7 @@ class Command(BaseCommand):
             label = f"[{index}/{total}] node_id={node.id} name={node.name}"
             try:
                 if options["queue"]:
-                    parse_document_with_docling.delay(node.id, **enqueue_kwargs())
+                    enqueue_parse(node.id, **enqueue_kwargs())
                     self.stdout.write(f"{label} queued")
                 else:
                     result = parse_document_with_docling(node.id, **enqueue_kwargs())

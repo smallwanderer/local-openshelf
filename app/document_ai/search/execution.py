@@ -129,7 +129,7 @@ def perform_vector_search_sync(job_id: int, *, retries: int = 0, max_retries: in
             }
 
     except EmbeddingBusyError as exc:
-        # dotori-document is demonstrably busy with real traffic, not broken --
+        # embedding-executor is demonstrably busy with real traffic, not broken --
         # callers (e.g. RAG's _create_rag_jobs_sync) surface this as a
         # retryable 503 instead of a generic search-failed error.
         if retries < max_retries:

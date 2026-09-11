@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -21,7 +22,6 @@ from document_ai.search.serializers import (
     VectorSearchRequestSerializer,
     VectorTuningRequestSerializer,
 )
-from document_ai.search.query_frontend import prepare_retrieval_query
 from document_ai.search.execution import search_documents_sync
 from document_ai.search.profiles import (
     get_effective_retrieval_config,
@@ -157,38 +157,23 @@ class VectorSearchView(APIView):
         node_ids = serializer.validated_data.get("node_ids") or []
         scoped_node_ids = _expand_scope_node_ids(request.user, node_ids, workspace=request.workspace)
         normalized_query = normalize_extracted_text(raw_query).strip()
-        if mode == "advanced":
-            query_plan = prepare_retrieval_query(
-                raw_query,
-                mode="search",
-                owner=request.user,
-                workspace=request.workspace,
-            )
-            retrieval_query = query_plan.retrieval_query or normalized_query
-            orm = query_plan.query_log.orm if query_plan.query_log else {}
-            query_plan_payload = {
-                "mode": mode,
-                "source": query_plan.source,
-                "retrieval_query": retrieval_query,
-                "intent": query_plan.intent,
-                "confidence": query_plan.confidence,
-                "warnings": query_plan.warnings,
-                "filters": query_plan.metadata.get("filters") or [],
-                "sorts": query_plan.metadata.get("sorts") or [],
-            }
-        else:
-            retrieval_query = normalized_query
-            orm = {}
-            query_plan_payload = {
-                "mode": mode,
-                "source": "direct",
-                "retrieval_query": retrieval_query,
-                "intent": "",
-                "confidence": None,
-                "warnings": [],
-                "filters": [],
-                "sorts": [],
-            }
+        # "advanced" used to run the query through the LLM query-understanding
+        # pipeline (query_frontend.prepare_retrieval_query); that pipeline was
+        # evaluated and deprecated for underperforming direct retrieval, so
+        # "advanced" is kept as an accepted API value but now runs the same
+        # direct pipeline as "basic".
+        retrieval_query = normalized_query
+        orm = {}
+        query_plan_payload = {
+            "mode": mode,
+            "source": "direct",
+            "retrieval_query": retrieval_query,
+            "intent": "",
+            "confidence": None,
+            "warnings": [],
+            "filters": [],
+            "sorts": [],
+        }
         try:
             retrieval_config = get_effective_retrieval_config(request.workspace)
             top_k = (
@@ -359,9 +344,60 @@ class RAGStreamView(View):
             response["Retry-After"] = str(rag_retry_after_seconds())
             return response
 
+        conversation = None
+        reply_to = None
         handed_off = False
         try:
             node_ids = serializer.validated_data.get("node_ids") or []
+            conversation_uid = kwargs.get("conversation_uid")
+            if conversation_uid is not None:
+                from document_ai.services.rag_conversation_service import (
+                    ConversationIdempotencyConflict,
+                    ConversationNotFound,
+                    ConversationPermissionDenied,
+                    append_user_message,
+                    get_conversation,
+                )
+
+                try:
+                    conversation = await sync_to_async(get_conversation, thread_sensitive=True)(
+                        workspace=request.workspace, uid=conversation_uid
+                    )
+                    if "node_ids" not in request_data:
+                        node_ids = list(conversation.default_node_ids or [])
+                    try:
+                        request_id = uuid.UUID(str(request_data.get("client_request_id")))
+                    except (TypeError, ValueError, AttributeError):
+                        return api_error_response(
+                            "INVALID_REQUEST", "client_request_id must be a UUID.", status=400
+                        )
+                    reply_to, created = await sync_to_async(
+                        append_user_message, thread_sensitive=True
+                    )(
+                        conversation=conversation,
+                        user=user,
+                        content=serializer.validated_data["question"],
+                        client_request_id=request_id,
+                        node_ids=[str(node_id) for node_id in node_ids],
+                    )
+                    if not created:
+                        return api_error_response(
+                            "IDEMPOTENCY_REPLAY",
+                            "This message was already submitted; reload the conversation.",
+                            status=409,
+                        )
+                except ConversationIdempotencyConflict:
+                    return api_error_response(
+                        "IDEMPOTENCY_CONFLICT",
+                        "client_request_id was already used for a different message.",
+                        status=409,
+                    )
+                except ConversationNotFound:
+                    return api_error_response("NOT_FOUND", "Conversation not found.", status=404)
+                except ConversationPermissionDenied:
+                    return api_error_response(
+                        "PERMISSION_DENIED", "You cannot continue this conversation.", status=403
+                    )
             scoped_node_ids = await sync_to_async(
                 _expand_scope_node_ids, thread_sensitive=True
             )(user, node_ids, workspace=request.workspace)
@@ -404,6 +440,8 @@ class RAGStreamView(View):
                     scoped_node_ids=scoped_node_ids,
                     llm_snapshot=llm_snapshot,
                     admission_token=admission_token,
+                    conversation=conversation,
+                    reply_to=reply_to,
                 )
             except RAGSearchBusyError as exc:
                 response = api_error_response(

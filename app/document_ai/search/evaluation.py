@@ -8,12 +8,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from config.enums import AIStatus
-from document_ai.embedding.embeding_models import EmbeddingResult, embed_document, embed_query
-from document_ai.parsers.config import get_embedding_backend, get_embedding_model
+from document_ai.embedding.embeding_models import EmbeddingResult
 from document_ai.search.profiles import (
     RetrievalProfileError,
     _active_for_workspace,
     get_effective_retrieval_config,
+    profile_threshold_to_retriever,
+    retrieval_tuning_params,
 )
 
 
@@ -108,59 +109,52 @@ def validate_dataset_items(axis: str, items: Any) -> list[dict]:
 
 
 def run_retrieval_evaluation(workspace, *, config: dict[str, Any], items: list[dict]) -> dict[str, Any]:
+    """Score a dataset against the production retrieval path.
+
+    This calls search_documents_sync rather than ranking chunks directly: the
+    candidate funnel (candidate_multiplier, per_node_candidate_cap, threshold)
+    and the document pooling are exactly what a profile change alters, so
+    scoring chunks standalone would report metrics for an algorithm the
+    product never runs.
+    """
     from document_ai.models import DocumentChunk
+    from document_ai.search.execution import search_documents_sync
 
     top_k = int(config.get("search_top_k", 5))
     dense_weight = float(config["dense_weight"])
     sparse_weight = float(config["sparse_weight"])
-    backend = get_embedding_backend()
-    model_name = get_embedding_model()
 
-    chunk_qs = DocumentChunk.objects.select_related(
-        "parse_result",
-        "parse_result__node",
-    ).filter(
+    chunk_count = DocumentChunk.objects.filter(
         parse_result__status=AIStatus.COMPLETED,
         parse_result__node__workspace=workspace,
-    )
-    chunk_records = [
-        {
-            "node_id": str(chunk.parse_result.node.uid),
-            "node_name": chunk.parse_result.node.name,
-            "text": chunk.text,
-        }
-        for chunk in chunk_qs
-        if (chunk.text or "").strip()
-    ]
-    if not chunk_records:
+    ).count()
+    if not chunk_count:
         raise RetrievalProfileError(
             "EVALUATION_CORPUS_EMPTY",
             "No completed document chunks were found for this workspace.",
             400,
         )
 
-    chunk_embeddings = [
-        embed_document(text=record["text"], model_name=model_name, backend=backend)
-        for record in chunk_records
-    ]
+    threshold = profile_threshold_to_retriever(config.get("retrieval_threshold"))
+    tuning_params = retrieval_tuning_params(config)
 
     hits_at_1 = 0
     hits_at_k = 0
     reciprocal_rank_sum = 0.0
+    search_ms_total = 0.0
     per_query = []
 
     for item in items:
-        expected_ids = set(item["expected_node_ids"])
-        query_embedding = embed_query(query=item["query"], model_name=model_name, backend=backend)
-        ranked_docs = rank_documents(
-            query_embedding=query_embedding,
-            chunk_records=chunk_records,
-            chunk_embeddings=chunk_embeddings,
+        results, metrics = search_documents_sync(
+            owner=None,
+            workspace=workspace,
+            query=item["query"],
             top_k=top_k,
-            dense_weight=dense_weight,
-            sparse_weight=sparse_weight,
+            threshold=threshold,
+            tuning_params=tuning_params,
         )
-        ranked_node_ids = [doc["node_id"] for doc in ranked_docs]
+        expected_ids = set(item["expected_node_ids"])
+        ranked_node_ids = [result["node_id"] for result in results]
         hit_at_1 = bool(ranked_node_ids) and ranked_node_ids[0] in expected_ids
         matched_rank = next(
             (rank for rank, node_id in enumerate(ranked_node_ids, start=1) if node_id in expected_ids),
@@ -171,18 +165,30 @@ def run_retrieval_evaluation(workspace, *, config: dict[str, Any], items: list[d
         if matched_rank is not None:
             hits_at_k += 1
             reciprocal_rank_sum += 1.0 / matched_rank
-        per_query.append({"query": item["query"], "hit_at_1": hit_at_1, "matched_rank": matched_rank})
+        search_ms = float(metrics.get("request_search_ms") or 0.0)
+        search_ms_total += search_ms
+        per_query.append(
+            {
+                "query": item["query"],
+                "hit_at_1": hit_at_1,
+                "matched_rank": matched_rank,
+                "search_ms": round(search_ms, 2),
+            }
+        )
 
     total_queries = len(items)
     return {
         "queries": total_queries,
-        "chunk_count": len(chunk_records),
+        "chunk_count": chunk_count,
         "top_k": top_k,
         "dense_weight": dense_weight,
         "sparse_weight": sparse_weight,
+        "candidate_multiplier": int(config.get("candidate_multiplier", 0)),
+        "per_node_candidate_cap": int(config.get("per_node_candidate_cap", 0)),
         "hit_rate_at_1": round(hits_at_1 / total_queries, 4),
         "hit_rate_at_k": round(hits_at_k / total_queries, 4),
         "mrr_at_k": round(reciprocal_rank_sum / total_queries, 4),
+        "avg_search_ms": round(search_ms_total / total_queries, 2),
         "per_query": per_query,
     }
 
@@ -250,7 +256,6 @@ def _start_evaluation(workspace, *, actor, axis: str, expected_revision: int, da
         draft = WorkspaceQualityProfileRevision.objects.select_for_update().filter(
             workspace=locked_workspace,
             status=WorkspaceQualityProfileRevision.STATUS_DRAFT,
-            change_axis=axis,
         ).first()
         current_revision = draft.revision if draft else 0
         if draft is None or expected_revision != current_revision:
@@ -284,9 +289,9 @@ def _start_evaluation(workspace, *, actor, axis: str, expected_revision: int, da
             status=WorkspaceQualityEvaluationRun.STATUS_PENDING,
             created_by=actor,
         )
-    from document_ai.tasks import run_quality_evaluation_task
+    from document_ai.orchestration import enqueue_retrieval_evaluation
 
-    run_quality_evaluation_task.delay(str(run.uid))
+    enqueue_retrieval_evaluation(str(run.uid))
     return {"ok": True, "run": _serialize_run(run)}
 
 
@@ -342,6 +347,8 @@ def execute_quality_evaluation_run(run_uid: str) -> None:
     from workspaces.models import WorkspaceQualityEvaluationRun
 
     run = WorkspaceQualityEvaluationRun.objects.select_related("workspace", "dataset").get(uid=run_uid)
+    if run.status == WorkspaceQualityEvaluationRun.STATUS_SUCCEEDED:
+        return
     run.status = WorkspaceQualityEvaluationRun.STATUS_RUNNING
     run.started_at = timezone.now()
     run.save(update_fields=["status", "started_at"])

@@ -57,7 +57,6 @@ class Node(models.Model):
             models.Index(fields=["workspace", "trashed"], name="node_workspace_trashed_idx"),
             models.Index(fields=["workspace", "node_type"], name="node_workspace_type_idx"),
             models.Index(fields=["workspace", "-created_at"], name="node_workspace_created_idx"),
-            models.Index(fields=["workspace", "path"], name="node_workspace_path_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -128,6 +127,21 @@ class Node(models.Model):
         if not self.is_file:
             return None
 
+        from document_ai.services.embedding_runtime_config import (
+            EmbeddingRuntimeConfigError,
+            get_active_embedding_runtime,
+        )
+
+        try:
+            active_runtime = get_active_embedding_runtime()
+            active_generation_id = active_runtime.generation_id
+            active_runtime_fingerprint = active_runtime.runtime_fingerprint
+            runtime_configured = True
+        except EmbeddingRuntimeConfigError:
+            active_generation_id = ""
+            active_runtime_fingerprint = ""
+            runtime_configured = False
+
         parse_status = AIStatus.PENDING
         parse_label = "Parsing queued"
         embedding_status = AIStatus.PENDING
@@ -138,6 +152,8 @@ class Node(models.Model):
         pending_chunks = 0
         failed_chunks = 0
         embedding_backend = None
+        embedding_contract_status = "missing"
+        embedded_generation_ids = []
 
         if not hasattr(self, "parse_result"):
             return {
@@ -152,6 +168,12 @@ class Node(models.Model):
                 "pending_chunks": pending_chunks,
                 "failed_chunks": failed_chunks,
                 "embedding_backend": embedding_backend,
+                "embedding_contract_status": embedding_contract_status,
+                "active_embedding_generation_id": active_generation_id,
+                "active_embedding_runtime_fingerprint": active_runtime_fingerprint,
+                "embedded_generation_ids": embedded_generation_ids,
+                "reembedding_required": False,
+                "searchable": False,
             }
 
         parse_result = self.parse_result
@@ -177,10 +199,10 @@ class Node(models.Model):
             prefetched_chunks = getattr(parse_result, "_prefetched_objects_cache", {}).get("chunks")
             if prefetched_chunks is not None:
                 chunk_count = len(prefetched_chunks) or chunk_count
-                completed_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.COMPLETED)
                 processing_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.PROCESSING)
                 pending_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.PENDING)
-                failed_chunks = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.FAILED)
+                chunk_failed_count = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.FAILED)
+                chunk_completed_count = sum(1 for chunk in prefetched_chunks if chunk.status == AIStatus.COMPLETED)
             else:
                 chunk_counts = parse_result.chunks.aggregate(
                     total=models.Count("id"),
@@ -191,28 +213,58 @@ class Node(models.Model):
                 )
 
                 chunk_count = chunk_counts["total"] or chunk_count
-                completed_chunks = chunk_counts["completed"] or 0
                 processing_chunks = chunk_counts["processing"] or 0
                 pending_chunks = chunk_counts["pending"] or 0
-                failed_chunks = chunk_counts["failed"] or 0
+                chunk_failed_count = chunk_counts["failed"] or 0
+                chunk_completed_count = chunk_counts["completed"] or 0
+
+            stored_generation_id = parse_result.embedding_generation_id
+            stored_fingerprint = parse_result.embedding_runtime_fingerprint
+            embedded_generation_ids = [stored_generation_id] if stored_generation_id else []
+            contract_matches = (
+                stored_generation_id == active_generation_id
+                and (
+                    not stored_fingerprint
+                    or stored_fingerprint == active_runtime_fingerprint
+                )
+            )
+            completed_chunks = chunk_completed_count if contract_matches else 0
+            failed_chunks = chunk_failed_count if contract_matches else 0
 
             if chunk_count == 0:
                 embedding_status = AIStatus.PENDING
                 embedding_label = "No chunks available for embedding"
-            elif completed_chunks == chunk_count:
+                embedding_contract_status = "missing"
+            elif not runtime_configured:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Active embedding contract is invalid"
+                embedding_contract_status = "invalid_config"
+            elif contract_matches and completed_chunks == chunk_count:
                 embedding_status = AIStatus.COMPLETED
                 embedding_label = f"Embedding completed ({completed_chunks}/{chunk_count} chunks)"
-            elif failed_chunks > 0 and completed_chunks + failed_chunks == chunk_count:
+                embedding_contract_status = "current"
+            elif contract_matches and failed_chunks > 0 and completed_chunks + failed_chunks == chunk_count:
                 embedding_status = AIStatus.FAILED
                 embedding_label = (
                     f"Embedding finished with failures ({completed_chunks}/{chunk_count} chunks completed)"
                 )
-            elif processing_chunks > 0 or completed_chunks > 0 or failed_chunks > 0:
+                embedding_contract_status = "failed"
+            elif processing_chunks > 0 or pending_chunks > 0:
                 embedding_status = AIStatus.PROCESSING
                 embedding_label = f"Embedding in progress ({completed_chunks}/{chunk_count} chunks completed)"
+                embedding_contract_status = "reembedding"
+            elif stored_generation_id and not contract_matches:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Embedding contract is outdated; re-embedding is required"
+                embedding_contract_status = "stale_contract"
+            elif chunk_failed_count > 0:
+                embedding_status = AIStatus.FAILED
+                embedding_label = "Embedding failed"
+                embedding_contract_status = "failed"
             else:
                 embedding_status = AIStatus.PENDING
                 embedding_label = f"Embedding queued ({pending_chunks}/{chunk_count} chunks pending)"
+                embedding_contract_status = "missing"
 
         return {
             "parse_status": parse_status,
@@ -226,6 +278,15 @@ class Node(models.Model):
             "pending_chunks": pending_chunks,
             "failed_chunks": failed_chunks,
             "embedding_backend": embedding_backend,
+            "embedding_contract_status": embedding_contract_status,
+            "active_embedding_generation_id": active_generation_id,
+            "active_embedding_runtime_fingerprint": active_runtime_fingerprint,
+            "embedded_generation_ids": embedded_generation_ids,
+            "reembedding_required": embedding_contract_status
+            in {"stale_contract", "failed", "missing"}
+            and parse_status == AIStatus.COMPLETED
+            and chunk_count > 0,
+            "searchable": embedding_contract_status == "current",
         }
 
     @property
@@ -387,12 +448,6 @@ class FileBlob(models.Model):
     sha256 = models.CharField(max_length=64, blank=True, null=True, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=["sha256"]),
-            models.Index(fields=["status"]),
-        ]
 
     def size_mb(self):
         if self.size is None:

@@ -24,22 +24,25 @@ interface RouteState {
   section: Section
   tab: KnowledgeTab
   operationsTab: OperationsTab
+  conversationUid: string | null
 }
 
 function routeFromPath(pathname: string): RouteState {
   const path = pathname.replace(/\/+$/, '') || '/'
-  if (path === '/workspace/home') return { section: 'home', tab: 'documents', operationsTab: 'summary' }
-  if (path === '/workspace/search') return { section: 'workspace', tab: 'retrieval', operationsTab: 'summary' }
-  if (path === '/workspace/chat') return { section: 'workspace', tab: 'chat', operationsTab: 'summary' }
-  if (path === '/workspace/settings/workspace') return { section: 'workspace', tab: 'workspaceSettings', operationsTab: 'summary' }
-  if (path === '/workspace/settings') return { section: 'workspace', tab: 'accountSettings', operationsTab: 'summary' }
-  if (path === '/workspace/operations/ai') return { section: 'operations', tab: 'documents', operationsTab: 'ai' }
-  if (path === '/workspace/operations/traces') return { section: 'operations', tab: 'documents', operationsTab: 'traces' }
-  if (path === '/workspace/operations') return { section: 'operations', tab: 'documents', operationsTab: 'summary' }
-  return { section: 'workspace', tab: 'documents', operationsTab: 'summary' }
+  const conversationMatch = path.match(/^\/workspace\/chat\/([0-9a-f-]+)$/i)
+  if (conversationMatch) return { section: 'workspace', tab: 'chat', operationsTab: 'summary', conversationUid: conversationMatch[1] }
+  if (path === '/workspace/home') return { section: 'home', tab: 'documents', operationsTab: 'summary', conversationUid: null }
+  if (path === '/workspace/search') return { section: 'workspace', tab: 'retrieval', operationsTab: 'summary', conversationUid: null }
+  if (path === '/workspace/chat') return { section: 'workspace', tab: 'chat', operationsTab: 'summary', conversationUid: null }
+  if (path === '/workspace/settings/workspace') return { section: 'workspace', tab: 'workspaceSettings', operationsTab: 'summary', conversationUid: null }
+  if (path === '/workspace/settings') return { section: 'workspace', tab: 'accountSettings', operationsTab: 'summary', conversationUid: null }
+  if (path === '/workspace/operations/ai') return { section: 'operations', tab: 'documents', operationsTab: 'ai', conversationUid: null }
+  if (path === '/workspace/operations/traces') return { section: 'operations', tab: 'documents', operationsTab: 'traces', conversationUid: null }
+  if (path === '/workspace/operations') return { section: 'operations', tab: 'documents', operationsTab: 'summary', conversationUid: null }
+  return { section: 'workspace', tab: 'documents', operationsTab: 'summary', conversationUid: null }
 }
 
-function pathForRoute(section: Section, tab: KnowledgeTab, operationsTab: OperationsTab, documentsQuery: string): string {
+function pathForRoute(section: Section, tab: KnowledgeTab, operationsTab: OperationsTab, documentsQuery: string, conversationUid: string | null): string {
   if (section === 'home') return '/workspace/home/'
   if (section === 'operations') {
     if (operationsTab === 'ai') return '/workspace/operations/ai/'
@@ -47,7 +50,7 @@ function pathForRoute(section: Section, tab: KnowledgeTab, operationsTab: Operat
     return '/workspace/operations/'
   }
   if (tab === 'retrieval') return '/workspace/search/'
-  if (tab === 'chat') return '/workspace/chat/'
+  if (tab === 'chat') return conversationUid ? `/workspace/chat/${conversationUid}/` : '/workspace/chat/'
   if (tab === 'accountSettings') return '/workspace/settings/'
   if (tab === 'workspaceSettings') return '/workspace/settings/workspace/'
   return `/workspace/documents/${documentsQuery}`
@@ -71,6 +74,8 @@ function App() {
   const [section, setSection] = useState<Section>(initialRoute.section)
   const [tab, setTab] = useState<KnowledgeTab>(initialRoute.tab)
   const [operationsTab, setOperationsTab] = useState<OperationsTab>(initialRoute.operationsTab)
+  const [conversationUid, setConversationUid] = useState<string | null>(initialRoute.conversationUid)
+  const [pendingOpenUid, setPendingOpenUid] = useState<string | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [session, setSession] = useState<SessionBootstrapResponse | null>(null)
   const [serverPolicy, setServerPolicy] = useState<ServerPolicySummary | null>(null)
@@ -101,26 +106,33 @@ function App() {
       setSection(restored.section)
       setTab(restored.tab)
       setOperationsTab(restored.operationsTab)
+      setConversationUid(restored.conversationUid)
       setMobileNav(false)
     }
     window.addEventListener('popstate', restoreRoute)
     return () => window.removeEventListener('popstate', restoreRoute)
   }, [])
 
-  function navigate(nextSection: Section, nextTab: KnowledgeTab = tab, nextOperationsTab: OperationsTab = operationsTab) {
+  function navigate(nextSection: Section, nextTab: KnowledgeTab = tab, nextOperationsTab: OperationsTab = operationsTab, nextConversationUid: string | null = nextTab === 'chat' ? conversationUid : null) {
     const leavingDocuments = section === 'workspace' && tab === 'documents' && !(nextSection === 'workspace' && nextTab === 'documents')
     if (leavingDocuments) documentsQueryRef.current = window.location.search
     setSection(nextSection)
     setTab(nextTab)
     setOperationsTab(nextOperationsTab)
+    setConversationUid(nextConversationUid)
     setMobileNav(false)
-    const nextPath = pathForRoute(nextSection, nextTab, nextOperationsTab, documentsQueryRef.current)
+    const nextPath = pathForRoute(nextSection, nextTab, nextOperationsTab, documentsQueryRef.current, nextConversationUid)
     const currentPath = window.location.pathname + window.location.search
     if (currentPath !== nextPath) window.history.pushState({}, '', nextPath)
   }
 
   function openAccountSettings() {
     navigate('workspace', 'accountSettings')
+  }
+
+  function openDocumentDetail(uid: string) {
+    setPendingOpenUid(uid)
+    navigate('workspace', 'documents')
   }
 
   const displayName = session?.user?.display_name || session?.user?.email.split('@')[0] || t('user.guest')
@@ -171,9 +183,9 @@ function App() {
       </header>
 
       {section === 'home' ? <HomeFeature onOpen={() => navigate('workspace', 'documents')} userName={displayName} tenantEnabled={Boolean(session?.auth.authenticated && session.user?.email_verified)} /> : section === 'operations' ? <div className="workspace-page">{operationsTab === 'summary' ? <OperationsFeature authorized={Boolean(session?.user?.is_staff)} authResolved={!systemLoading} /> : operationsTab === 'ai' ? <OperationsAiSettings policy={serverPolicy} loading={systemLoading} failed={systemError} authorized={Boolean(session?.user?.is_staff)} authResolved={!systemLoading} /> : <OperationsPlaceholder authorized={Boolean(session?.user?.is_staff)} authResolved={!systemLoading} />}</div> : <div className="workspace-page">
-        {tab === 'documents' && <DocumentsFeature onSearch={() => navigate('workspace', 'retrieval')} onAsk={() => navigate('workspace', 'chat')} />}
-        {tab === 'retrieval' && <SearchFeature />}
-        {tab === 'chat' && <ChatFeature />}
+        {tab === 'documents' && <DocumentsFeature onSearch={() => navigate('workspace', 'retrieval')} onAsk={() => navigate('workspace', 'chat')} pendingOpenUid={pendingOpenUid} onPendingOpenHandled={() => setPendingOpenUid(null)} />}
+        {tab === 'retrieval' && <SearchFeature onOpenDocument={openDocumentDetail} />}
+        {tab === 'chat' && <ChatFeature conversationUid={conversationUid} onConversationChange={(uid) => navigate('workspace', 'chat', 'summary', uid)} onOpenDocument={openDocumentDetail} />}
         {tab === 'accountSettings' && <AccountSettingsFeature session={session} loading={systemLoading} failed={systemError} />}
         {tab === 'workspaceSettings' && <WorkspaceSettingsFeature policy={serverPolicy} loading={systemLoading} failed={systemError} />}
       </div>}

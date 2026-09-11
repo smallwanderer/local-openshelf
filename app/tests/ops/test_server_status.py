@@ -216,6 +216,19 @@ class ServerStatusCommandTests(TestCase):
         call_command("server_status", "--json-output", "--skip-file-io", stdout=out)
         payload = json.loads(out.getvalue())
 
-        assert set(payload.keys()) == {"connection", "features"}
+        assert set(payload.keys()) == {"connection", "features", "memory_reservations"}
         assert set(payload["features"].keys()) == {"file_io", "embedding", "rag"}
         assert payload["features"]["file_io"]["pipeline_check"] is None
+
+    def test_json_output_reports_memory_reservations(self):
+        out = io.StringIO()
+        call_command("server_status", "--json-output", "--skip-file-io", stdout=out)
+        reservations = json.loads(out.getvalue())["memory_reservations"]
+
+        assert set(reservations.keys()) == {"scope", "claims", "total"}
+        # The total is derived from the claims on every read, so it must agree
+        # with them even when nothing has been claimed yet.
+        assert reservations["total"]["ram_mb"] == sum(
+            claim["ram_mb"] for claim in reservations["claims"].values()
+        )
+        assert set(reservations["total"]["workloads"]) == set(reservations["claims"])

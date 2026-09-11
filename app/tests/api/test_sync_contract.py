@@ -64,7 +64,7 @@ class SyncContractTests(TestCase):
         second = self._diff("second").json()
 
         self.assertNotEqual(first["root_uid"], second["root_uid"])
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             response = self.client.post(
                 reverse("sync_api:upload"),
                 data={

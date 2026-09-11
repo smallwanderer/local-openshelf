@@ -19,7 +19,7 @@ class RAGSearchError(RuntimeError):
 
 
 class RAGSearchBusyError(RAGSearchError):
-    """Search failed specifically because dotori-document's admission queue
+    """Search failed specifically because embedding-executor's admission queue
     rejected the query embedding call (EMBEDDING_BUSY) -- callers surface
     this as a retryable 503 instead of a generic search-failed 500.
     """
@@ -42,6 +42,8 @@ def _create_rag_jobs_sync(
     scoped_node_ids: list[str],
     llm_snapshot: dict,
     tuning_params: dict | None = None,
+    conversation=None,
+    reply_to=None,
 ) -> tuple[SearchJob, RAGJob]:
     from document_ai.search.execution import perform_vector_search_sync
 
@@ -65,7 +67,7 @@ def _create_rag_jobs_sync(
             )
         raise RAGSearchError(error_message)
 
-    rag_job = RAGJob.objects.create(
+    rag_job_values = dict(
         owner=owner,
         workspace=search_job.workspace,
         search_job=search_job,
@@ -82,6 +84,35 @@ def _create_rag_jobs_sync(
         stage_message="검색된 근거를 바탕으로 답변을 생성하고 있습니다.",
         **llm_snapshot,
     )
+    if conversation is not None and reply_to is not None:
+        from django.db import transaction
+        from django.db.models import Max
+        from document_ai.models import RAGConversation, RAGMessage
+
+        with transaction.atomic():
+            locked_conversation = RAGConversation.objects.select_for_update().get(pk=conversation.pk)
+            if reply_to.conversation_id != locked_conversation.pk:
+                raise ValueError("Reply and RAG job must belong to the same conversation.")
+            rag_job = RAGJob.objects.create(
+                conversation=locked_conversation, **rag_job_values
+            )
+            sequence = (
+                RAGMessage.objects.filter(conversation=locked_conversation).aggregate(maximum=Max("sequence"))["maximum"]
+                or 0
+            ) + 1
+            assistant_message = RAGMessage.objects.create(
+                conversation=locked_conversation,
+                sequence=sequence,
+                role=RAGMessage.ROLE_ASSISTANT,
+                reply_to=reply_to,
+                rag_job=rag_job,
+                node_ids=rag_job.node_ids,
+            )
+            locked_conversation.save(update_fields=["updated_at"])
+        rag_job._conversation_message_uid = str(assistant_message.uid)
+        rag_job._client_request_id = str(reply_to.client_request_id)
+    else:
+        rag_job = RAGJob.objects.create(**rag_job_values)
     return search_job, rag_job
 
 
@@ -102,6 +133,8 @@ def create_rag_streaming_response(
     llm_snapshot: dict,
     admission_token=None,
     tuning_params: dict | None = None,
+    conversation=None,
+    reply_to=None,
 ) -> StreamingHttpResponse:
     try:
         search_job, rag_job = _create_rag_jobs_sync(
@@ -116,6 +149,8 @@ def create_rag_streaming_response(
             scoped_node_ids=scoped_node_ids,
             llm_snapshot=llm_snapshot,
             tuning_params=tuning_params,
+            conversation=conversation,
+            reply_to=reply_to,
         )
     except Exception:
         # Nothing made it to the background generation thread, so this
@@ -148,6 +183,9 @@ def create_rag_streaming_response(
         yield encode_event({
             "type": "started",
             "job_id": rag_job.id,
+            "conversation_uid": str(conversation.uid) if conversation is not None else None,
+            "message_uid": getattr(rag_job, "_conversation_message_uid", None),
+            "client_request_id": getattr(rag_job, "_client_request_id", None),
             "llm_target": "external" if rag_job.llm_endpoint_id else "server",
             "llm_model": rag_job.llm_model,
         })
@@ -241,6 +279,8 @@ async def create_rag_streaming_response_async(
     llm_snapshot: dict,
     admission_token,
     tuning_params: dict | None = None,
+    conversation=None,
+    reply_to=None,
 ) -> StreamingHttpResponse:
     """Search in a bounded sync section, then stream LLM HTTP on the event loop."""
 
@@ -259,6 +299,8 @@ async def create_rag_streaming_response_async(
             scoped_node_ids=scoped_node_ids,
             llm_snapshot=llm_snapshot,
             tuning_params=tuning_params,
+            conversation=conversation,
+            reply_to=reply_to,
         )
     except (Exception, asyncio.CancelledError):
         # CancelledError (client disconnect / stop-button abort during the
@@ -292,6 +334,9 @@ async def create_rag_streaming_response_async(
             {
                 "type": "started",
                 "job_id": rag_job.id,
+                "conversation_uid": str(conversation.uid) if conversation is not None else None,
+                "message_uid": getattr(rag_job, "_conversation_message_uid", None),
+                "client_request_id": getattr(rag_job, "_client_request_id", None),
                 "llm_target": "external" if rag_job.llm_endpoint_id else "server",
                 "llm_model": rag_job.llm_model,
             }

@@ -28,7 +28,7 @@ class EmbeddingResult:
 
 
 class EmbeddingBusyError(RuntimeError):
-    """dotori-document's admission queue rejected the request (EMBEDDING_BUSY
+    """embedding-executor's admission queue rejected the request (EMBEDDING_BUSY
     / HTTP 503). A distinct type from other RuntimeErrors so callers (search,
     RAG) can surface it as a retryable 503 to the client instead of a generic
     500 -- the caller is demonstrably busy with real traffic, not broken.

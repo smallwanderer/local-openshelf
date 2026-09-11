@@ -101,7 +101,7 @@ class CLIHttpApiTests(TestCase):
             [str(own.uid)],
         )
 
-    @patch("document_ai.signals.parse_document_with_docling.delay")
+    @patch("document_ai.signals.enqueue_parse")
     def test_upload_uses_cli_token_owner_without_csrf(self, parse_delay):
         response = self.client.post(
             reverse("cli_api:upload"),

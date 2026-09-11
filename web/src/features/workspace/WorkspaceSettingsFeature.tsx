@@ -1,12 +1,11 @@
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from 'react'
 import type { ServerPolicySummary } from '../../api/models'
 import {
-  evaluationDatasetApi, evaluationRunApi,
-  generationProfileApi, promptProfileApi, qualityProfileApi, retrievalProfileApi,
+  evaluationDatasetApi, evaluationRunApi, qualityProfileApi,
   type EvaluationDataset, type EvaluationRun, type GenerationConfig,
-  type PromptPolicy, type PromptProfileEnvelope, type PromptRoute,
-  type QualityAxis, type QualityFieldSchema, type QualityProfileEnvelope,
-  type QualityProfileRevision, type QualityProfileVersionSummary, type RetrievalConfig,
+  type PromptPolicy, type PromptRoute, type QualityFieldSchema,
+  type QualityProfileEnvelope, type QualityProfileRow, type QualityProfileVersionSummary,
+  type RetrievalConfig, type SaveQualityProfileDraftInput,
 } from '../../api/qualityProfiles'
 import { tenantApi, type WorkspaceMember, type WorkspaceSummary } from '../../api/tenants'
 import { ApiClientError } from '../../api/http'
@@ -19,19 +18,23 @@ interface WorkspaceSettingsFeatureProps {
   failed: boolean
 }
 
-type SettingsTab = QualityAxis | 'evaluation' | 'general'
-type EditableConfig = RetrievalConfig | GenerationConfig
+type SettingsTab = 'general' | 'parameters' | 'evaluation'
 
-const RETRIEVAL_FIELDS: (keyof RetrievalConfig)[] = [
-  'dense_weight', 'sparse_weight', 'search_top_k', 'rag_search_top_k',
-  'retrieval_threshold', 'evidence_top_k', 'evidence_context_window',
-  'candidate_multiplier', 'per_node_candidate_cap', 'query_sparse_top_n',
-  'pooling_method', 'pool_top_k', 'pool_tau', 'doc_length_penalty_alpha',
-  'contextual_compression',
-]
+interface ParamForm {
+  retrieval: RetrievalConfig
+  generation: GenerationConfig
+  prompt_policy: PromptPolicy
+}
+
+const RETRIEVAL_WEIGHT_FIELDS: (keyof RetrievalConfig)[] = ['candidate_multiplier', 'query_sparse_top_n']
+const POOLING_FIELDS: (keyof RetrievalConfig)[] = ['pooling_method', 'pool_top_k', 'pool_tau', 'doc_length_penalty_alpha', 'per_node_candidate_cap']
+const EXPOSURE_FIELDS: (keyof RetrievalConfig)[] = ['search_top_k', 'rag_search_top_k', 'retrieval_threshold', 'evidence_top_k', 'evidence_context_window']
 const GENERATION_FIELDS: (keyof GenerationConfig)[] = ['max_output_tokens', 'temperature', 'top_p']
 
-const FALLBACK_SCHEMA: Record<string, QualityFieldSchema> = {
+const STEPPER_FIELDS = new Set(['candidate_multiplier', 'pool_top_k', 'per_node_candidate_cap', 'search_top_k', 'rag_search_top_k', 'evidence_top_k', 'evidence_context_window'])
+const DECIMAL_FIELDS: Record<string, number> = { pool_tau: 1, doc_length_penalty_alpha: 2, retrieval_threshold: 2, temperature: 2, top_p: 2 }
+
+const FALLBACK_RETRIEVAL_SCHEMA: Record<string, QualityFieldSchema> = {
   dense_weight: { type: 'number', tier: 'core', minimum: 0, maximum: 1, step: 0.05, effects: ['retrieval_quality'] },
   sparse_weight: { type: 'number', tier: 'core', minimum: 0, maximum: 1, step: 0.05, effects: ['retrieval_quality'] },
   search_top_k: { type: 'integer', tier: 'core', minimum: 1, maximum: 50, step: 1, effects: ['retrieval_quality', 'latency'] },
@@ -47,6 +50,8 @@ const FALLBACK_SCHEMA: Record<string, QualityFieldSchema> = {
   pool_tau: { type: 'number', tier: 'advanced', minimum: 0.1, maximum: 20, step: 0.1, effects: ['retrieval_quality'] },
   doc_length_penalty_alpha: { type: 'number', tier: 'advanced', minimum: 0, maximum: 1, step: 0.05, effects: ['retrieval_quality'] },
   contextual_compression: { type: 'boolean', tier: 'advanced', effects: ['context_quality', 'latency'] },
+}
+const FALLBACK_GENERATION_SCHEMA: Record<string, QualityFieldSchema> = {
   max_output_tokens: { type: 'integer', tier: 'core', minimum: 64, maximum: 8192, step: 64, effects: ['generation_quality', 'latency'] },
   temperature: { type: 'number', tier: 'core', minimum: 0, maximum: 2, step: 0.05, effects: ['generation_quality'] },
   top_p: { type: 'number', tier: 'advanced', minimum: 0.01, maximum: 1, step: 0.01, effects: ['generation_quality'] },
@@ -78,9 +83,13 @@ function changedOverrides<T extends Record<string, unknown>>(active: T, candidat
     .map((key) => [key, candidate[key]])) as Partial<T>
 }
 
-type ProfileSummaryRevision = Pick<QualityProfileRevision<Record<string, unknown>>, 'version' | 'revision' | 'validation' | 'updated_at' | 'note'>
+function axisOverrides<T extends Record<string, unknown>>(activeEffective: T, candidate: T, draftChangedFields: string[], resetFields: string[]): Partial<T> {
+  const keys = new Set([...Object.keys(changedOverrides(activeEffective, candidate)), ...draftChangedFields])
+  resetFields.forEach((field) => keys.delete(field))
+  return Object.fromEntries([...keys].map((field) => [field, candidate[field]])) as Partial<T>
+}
 
-function ProfileSummary({ revision, kind }: { revision: ProfileSummaryRevision; kind: 'active' | 'draft' }) {
+function ProfileSummary({ revision, kind }: { revision: QualityProfileRow; kind: 'active' | 'draft' }) {
   const { locale, t } = useI18n()
   return <div className={`quality-revision ${kind}`}>
     <div><span className={`quality-status ${validationTone(revision.validation.state)}`}>{t(`workspaceSettings.validation.${revision.validation.state}` as TranslationKey)}</span><strong>{kind === 'active' ? t('workspaceSettings.activeVersion', { version: revision.version }) : t('workspaceSettings.draftRevision', { revision: revision.revision })}</strong></div>
@@ -93,41 +102,91 @@ function EffectBadges({ effects = [] }: { effects?: string[] }) {
   return <span className="quality-effects">{effects.map((effect) => <em key={effect}>{t(`workspaceSettings.effect.${effect}` as TranslationKey)}</em>)}</span>
 }
 
-interface FieldEditorProps {
+function Stepper({ value, min, max, step = 1, disabled, onChange }: { value: number; min: number; max: number; step?: number; disabled: boolean; onChange: (value: number) => void }) {
+  return <div className="stepper">
+    <button type="button" disabled={disabled || value <= min} onClick={() => onChange(Math.max(min, Math.round((value - step) * 100) / 100))}>−</button>
+    <span className="stepper-value">{value}</span>
+    <button type="button" disabled={disabled || value >= max} onClick={() => onChange(Math.min(max, Math.round((value + step) * 100) / 100))}>+</button>
+  </div>
+}
+
+function SliderControl({ value, min, max, step, disabled, decimals = 0, onChange }: { value: number; min: number; max: number; step: number; disabled: boolean; decimals?: number; onChange: (value: number) => void }) {
+  return <div className="range-slider">
+    <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} />
+    <span className="range-value">{decimals ? value.toFixed(decimals) : value}</span>
+  </div>
+}
+
+function SegControl({ value, choices, disabled, labelFor, onChange }: { value: string; choices: string[]; disabled: boolean; labelFor: (choice: string) => string; onChange: (value: string) => void }) {
+  return <div className="seg-control">{choices.map((choice) => <button key={choice} type="button" className={value === choice ? 'on' : ''} disabled={disabled} onClick={() => onChange(choice)}>{labelFor(choice)}</button>)}</div>
+}
+
+function DualWeightSlider({ dense, disabled, onChange }: { dense: number; disabled: boolean; onChange: (dense: number) => void }) {
+  const { t } = useI18n()
+  return <div className="dual-slider">
+    <input type="range" min={0} max={1} step={0.05} value={dense} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} />
+    <div className="dual-slider-labels">
+      <span>{t('workspaceSettings.field.dense_weight')} {dense.toFixed(2)}</span>
+      <span>{t('workspaceSettings.field.sparse_weight')} {(1 - dense).toFixed(2)}</span>
+    </div>
+  </div>
+}
+
+interface FieldRowProps {
   name: string
+  schema: QualityFieldSchema
   value: unknown
   activeValue: unknown
   defaultValue: unknown
-  schema: QualityFieldSchema
   disabled: boolean
   onChange: (value: unknown) => void
   onRestore: () => void
   onReset: () => void
 }
 
-function FieldEditor({ name, value, activeValue, defaultValue, schema, disabled, onChange, onRestore, onReset }: FieldEditorProps) {
+function FieldRow({ name, schema, value, activeValue, defaultValue, disabled, onChange, onRestore, onReset }: FieldRowProps) {
   const { t } = useI18n()
   const isChanged = JSON.stringify(value) !== JSON.stringify(activeValue)
   const inherited = JSON.stringify(value) === JSON.stringify(defaultValue)
-  const updateNumber = (event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value === '' ? null : Number(event.target.value))
-  const displayValue = name === 'contextual_compression' ? Boolean((value as { enabled?: boolean } | undefined)?.enabled) : value
 
-  return <label className={`quality-field ${isChanged ? 'changed' : ''}`}>
-    <span className="quality-field-head"><span><strong>{t(`workspaceSettings.field.${name}` as TranslationKey)}</strong><small>{t(`workspaceSettings.fieldHelp.${name}` as TranslationKey)}</small></span><EffectBadges effects={schema.effects} /></span>
-    <span className="quality-input-row">
-      {schema.type === 'boolean'
-        ? <button type="button" className={`quality-toggle ${displayValue ? 'active' : ''}`} role="switch" aria-checked={Boolean(displayValue)} disabled={disabled} onClick={() => onChange({ enabled: !displayValue })}><i /><span>{displayValue ? t('action.enabled') : t('action.disabled')}</span></button>
-        : schema.type === 'enum'
-          ? <select disabled={disabled} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>{schema.choices?.map((choice) => <option key={choice} value={choice}>{t(`workspaceSettings.choice.${choice}` as TranslationKey)}</option>)}</select>
-          : <input disabled={disabled} type="number" value={value == null ? '' : String(value)} min={schema.minimum} max={schema.maximum} step={schema.step} onChange={updateNumber} />}
+  let control: React.ReactNode
+  if (name === 'contextual_compression') {
+    const enabled = Boolean((value as { enabled?: boolean } | undefined)?.enabled)
+    control = <button type="button" className={`quality-toggle ${enabled ? 'active' : ''}`} role="switch" aria-checked={enabled} disabled={disabled} onClick={() => onChange({ enabled: !enabled })}><i /><span>{enabled ? t('action.enabled') : t('action.disabled')}</span></button>
+  } else if (schema.type === 'enum') {
+    control = <SegControl value={String(value ?? '')} choices={schema.choices ?? []} disabled={disabled} labelFor={(choice) => t(`workspaceSettings.choice.${choice}` as TranslationKey)} onChange={onChange} />
+  } else if (name === 'retrieval_threshold') {
+    const isSet = value != null
+    control = <div className="range-slider nullable">
+      <label className="nullable-toggle"><input type="checkbox" checked={isSet} disabled={disabled} onChange={(event) => onChange(event.target.checked ? (schema.minimum ?? 0) : null)} />{t('workspaceSettings.useThreshold')}</label>
+      {isSet && <SliderControl value={Number(value)} min={schema.minimum ?? 0} max={schema.maximum ?? 1} step={schema.step ?? 0.05} disabled={disabled} decimals={2} onChange={onChange} />}
+    </div>
+  } else if (STEPPER_FIELDS.has(name)) {
+    control = <Stepper value={Number(value)} min={schema.minimum ?? 0} max={schema.maximum ?? 100} step={schema.step ?? 1} disabled={disabled} onChange={onChange} />
+  } else {
+    control = <SliderControl value={Number(value)} min={schema.minimum ?? 0} max={schema.maximum ?? 100} step={schema.step ?? 1} disabled={disabled} decimals={DECIMAL_FIELDS[name] ?? 0} onChange={onChange} />
+  }
+
+  return <div className={`quality-field ${isChanged ? 'changed' : ''}`}>
+    <div className="quality-field-head"><span><strong>{t(`workspaceSettings.field.${name}` as TranslationKey)}</strong><small>{t(`workspaceSettings.fieldHelp.${name}` as TranslationKey)}</small></span><EffectBadges effects={schema.effects} /></div>
+    <div className="quality-input-row">
+      {control}
       <span className="quality-field-actions"><button type="button" className="text-button" disabled={disabled || !isChanged} onClick={onRestore}>{t('workspaceSettings.restoreActive')}</button><button type="button" className="text-button" disabled={disabled || inherited} onClick={onReset}>{t('workspaceSettings.inheritDefault')}</button></span>
-    </span>
-    <span className="quality-field-meta"><small>{t('workspaceSettings.currentValue', { value: String(activeValue ?? '—') })}</small><small>{t('workspaceSettings.defaultValue', { value: String(defaultValue ?? '—') })}</small>{isChanged && <b>{t('workspaceSettings.changed')}</b>}</span>
-  </label>
+    </div>
+    <div className="quality-field-meta"><small>{t('workspaceSettings.currentValue', { value: String(activeValue ?? '—') })}</small><small>{t('workspaceSettings.defaultValue', { value: String(defaultValue ?? '—') })}</small>{isChanged && <b>{t('workspaceSettings.changed')}</b>}</div>
+  </div>
 }
 
-function DraftActions<T extends Record<string, unknown>>({ envelope, busy, note, setNote, allowUnverified, setAllowUnverified, onSave, onDiscard, onApply }: {
-  envelope: QualityProfileEnvelope<T>
+function ParamGroup({ titleKey, helpKey, axis, children }: { titleKey: TranslationKey; helpKey: TranslationKey; axis?: 'retrieval' | 'generation'; children: React.ReactNode }) {
+  const { t } = useI18n()
+  return <section className="quality-param-group">
+    <div className="quality-section-head"><div><h3>{t(titleKey)}</h3><p>{t(helpKey)}</p></div>{axis && <span className={`quality-axis-note axis-${axis}`}>{t(`workspaceSettings.axisLabel.${axis}` as TranslationKey)}</span>}</div>
+    <div className="quality-field-grid">{children}</div>
+  </section>
+}
+
+function DraftActions({ profile, busy, note, setNote, allowUnverified, setAllowUnverified, onSave, onDiscard, onApply }: {
+  profile: QualityProfileEnvelope
   busy: boolean
   note: string
   setNote: (value: string) => void
@@ -138,15 +197,15 @@ function DraftActions<T extends Record<string, unknown>>({ envelope, busy, note,
   onApply: () => void
 }) {
   const { t } = useI18n()
-  const draft = envelope.draft
+  const draft = profile.draft
   return <aside className="quality-draft-bar">
     <div><strong>{draft ? t('workspaceSettings.draftPending') : t('workspaceSettings.newDraft')}</strong><small>{t('workspaceSettings.draftFlow')}</small></div>
-    <label><span>{t('workspaceSettings.changeNote')}</span><input value={note} disabled={busy || !envelope.permissions.can_edit} maxLength={500} placeholder={t('workspaceSettings.changeNotePlaceholder')} onChange={(event) => setNote(event.target.value)} /></label>
-    {draft && <label className="quality-unverified"><input type="checkbox" checked={allowUnverified} disabled={busy || !envelope.permissions.can_apply} onChange={(event) => setAllowUnverified(event.target.checked)} /><span>{t('workspaceSettings.allowUnverified')}</span></label>}
+    <label><span>{t('workspaceSettings.changeNote')}</span><input value={note} disabled={busy || !profile.permissions.can_edit} maxLength={500} placeholder={t('workspaceSettings.changeNotePlaceholder')} onChange={(event) => setNote(event.target.value)} /></label>
+    {draft && <label className="quality-unverified"><input type="checkbox" checked={allowUnverified} disabled={busy || !profile.permissions.can_apply} onChange={(event) => setAllowUnverified(event.target.checked)} /><span>{t('workspaceSettings.allowUnverified')}</span></label>}
     <div className="quality-actions">
-      {draft && <button type="button" className="text-button danger" disabled={busy || !envelope.permissions.can_edit} onClick={onDiscard}>{t('workspaceSettings.discard')}</button>}
-      <button type="button" className="secondary-button" disabled={busy || !envelope.permissions.can_edit} onClick={onSave}>{busy ? t('workspaceSettings.saving') : t('workspaceSettings.saveDraft')}</button>
-      <button type="button" className="primary-button" disabled={busy || !draft || !envelope.permissions.can_apply || (!allowUnverified && draft.validation.state !== 'verified')} onClick={onApply}>{t('workspaceSettings.apply')}</button>
+      {draft && <button type="button" className="text-button danger" disabled={busy || !profile.permissions.can_edit} onClick={onDiscard}>{t('workspaceSettings.discard')}</button>}
+      <button type="button" className="secondary-button" disabled={busy || !profile.permissions.can_edit} onClick={onSave}>{busy ? t('workspaceSettings.saving') : t('workspaceSettings.saveDraft')}</button>
+      <button type="button" className="primary-button" disabled={busy || !draft || !profile.permissions.can_apply} onClick={onApply}>{t('workspaceSettings.apply')}</button>
     </div>
   </aside>
 }
@@ -318,18 +377,14 @@ function GeneralSettingsPanel() {
 
 export function WorkspaceSettingsFeature({ policy, loading: policyLoading, failed: policyFailed }: WorkspaceSettingsFeatureProps) {
   const { locale, t } = useI18n()
-  const [tab, setTab] = useState<SettingsTab>('retrieval')
-  const [retrieval, setRetrieval] = useState<QualityProfileEnvelope<RetrievalConfig> | null>(null)
-  const [generation, setGeneration] = useState<QualityProfileEnvelope<GenerationConfig> | null>(null)
-  const [prompt, setPrompt] = useState<PromptProfileEnvelope | null>(null)
+  const [tab, setTab] = useState<SettingsTab>('parameters')
+  const [profile, setProfile] = useState<QualityProfileEnvelope | null>(null)
   const [versions, setVersions] = useState<QualityProfileVersionSummary[]>([])
-  const [form, setForm] = useState<EditableConfig | null>(null)
-  const [promptForm, setPromptForm] = useState<PromptPolicy | null>(null)
+  const [form, setForm] = useState<ParamForm | null>(null)
   const [promptRoute, setPromptRoute] = useState<PromptRoute>('document_rag')
   const [promptPreview, setPromptPreview] = useState('')
-  const [advanced, setAdvanced] = useState(false)
   const [note, setNote] = useState('')
-  const [resetFields, setResetFields] = useState<string[]>([])
+  const [resetFields, setResetFields] = useState<{ retrieval: string[]; generation: string[] }>({ retrieval: [], generation: [] })
   const [allowUnverified, setAllowUnverified] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -347,37 +402,38 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
   const [evalBusy, setEvalBusy] = useState(false)
   const [evalError, setEvalError] = useState('')
 
-  const currentEnvelope = tab === 'retrieval' ? retrieval : tab === 'generation' ? generation : tab === 'prompt_policy' ? prompt : null
-
-  async function loadTab(selected: SettingsTab, alive = () => true) {
-    if (selected === 'general') return
+  async function loadProfile(alive = () => true) {
     setLoading(true); setError(''); setNotice('')
     try {
-      if (selected === 'retrieval') {
-        const payload = await retrievalProfileApi.get()
-        if (!alive()) return
-        setRetrieval(payload); setForm(copyConfig(payload.draft?.effective ?? payload.active.effective)); setNote(payload.draft?.note ?? ''); setResetFields([])
-      } else if (selected === 'generation') {
-        const payload = await generationProfileApi.get()
-        if (!alive()) return
-        setGeneration(payload); setForm(copyConfig(payload.draft?.effective ?? payload.active.effective)); setNote(payload.draft?.note ?? ''); setResetFields([])
-      } else if (selected === 'prompt_policy') {
-        const payload = await promptProfileApi.get()
-        if (!alive()) return
-        setPrompt(payload); setPromptForm(copyConfig(payload.draft?.effective ?? payload.active.effective)); setNote(payload.draft?.note ?? '')
-      } else {
-        const [versionsPayload, retrievalPayload, datasetsPayload] = await Promise.all([
-          qualityProfileApi.listVersions(),
-          retrievalProfileApi.get(),
-          evaluationDatasetApi.list('retrieval'),
-        ])
-        if (!alive()) return
-        setVersions(versionsPayload.results)
-        setRetrieval(retrievalPayload)
-        setEvalDatasets(datasetsPayload.datasets)
-        setEvalDatasetUid(''); setEvalCreatingDataset(false); setEvalDatasetName(''); setEvalDatasetItemsText('')
-        setEvalDatasetError(''); setEvalRun(null); setEvalError('')
-      }
+      const payload = await qualityProfileApi.get()
+      if (!alive()) return
+      setProfile(payload)
+      const base = payload.draft ?? payload.active
+      setForm({
+        retrieval: copyConfig(base.retrieval.effective),
+        generation: copyConfig(base.generation.effective),
+        prompt_policy: copyConfig(base.prompt_policy.effective as unknown as PromptPolicy),
+      })
+      setNote(payload.draft?.note ?? '')
+      setResetFields({ retrieval: [], generation: [] })
+      setPromptPreview('')
+    } catch (loadError) {
+      if (alive()) setError(errorMessage(loadError, t('workspaceSettings.loadFailed')))
+    } finally { if (alive()) setLoading(false) }
+  }
+
+  async function loadEvaluationTab(alive = () => true) {
+    setLoading(true); setError('')
+    try {
+      const [versionsPayload, datasetsPayload] = await Promise.all([
+        qualityProfileApi.listVersions(),
+        evaluationDatasetApi.list('retrieval'),
+      ])
+      if (!alive()) return
+      setVersions(versionsPayload.results)
+      setEvalDatasets(datasetsPayload.datasets)
+      setEvalDatasetUid(''); setEvalCreatingDataset(false); setEvalDatasetName(''); setEvalDatasetItemsText('')
+      setEvalDatasetError(''); setEvalRun(null); setEvalError('')
     } catch (loadError) {
       if (alive()) setError(errorMessage(loadError, t('workspaceSettings.loadFailed')))
     } finally { if (alive()) setLoading(false) }
@@ -385,103 +441,95 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
 
   useEffect(() => {
     let alive = true
-    void loadTab(tab, () => alive)
+    if (tab === 'general') { /* self-loading panel */ }
+    else if (tab === 'parameters') void loadProfile(() => alive)
+    else void loadEvaluationTab(() => alive)
     return () => { alive = false }
-    // The selected workspace endpoint is intentionally resolved once per tab.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
-  const fields = tab === 'retrieval' ? RETRIEVAL_FIELDS : GENERATION_FIELDS
-  const editableEnvelope = tab === 'retrieval' ? retrieval : generation
-  const effectiveSchema = useMemo(() => ({ ...FALLBACK_SCHEMA, ...(editableEnvelope?.schema ?? {}) }), [editableEnvelope])
-  const visibleFields = fields.filter((field) => advanced || effectiveSchema[String(field)]?.tier !== 'advanced')
-  const draftConflict = currentEnvelope?.draft_conflict
-  const editDisabled = busy || !currentEnvelope?.permissions.can_edit || Boolean(draftConflict)
+  const retrievalSchema = useMemo(() => ({ ...FALLBACK_RETRIEVAL_SCHEMA, ...(profile?.schema.retrieval ?? {}) }), [profile])
+  const generationSchema = useMemo(() => ({ ...FALLBACK_GENERATION_SCHEMA, ...(profile?.schema.generation ?? {}) }), [profile])
+  const editDisabled = busy || !profile?.permissions.can_edit
 
-  function changeField(field: string, value: unknown) {
-    if (form) {
-      setResetFields((current) => current.filter((item) => item !== field))
-      setForm({ ...form, [field]: value } as EditableConfig)
-    }
+  function changeField(axis: 'retrieval' | 'generation', field: string, value: unknown) {
+    setResetFields((current) => ({ ...current, [axis]: current[axis].filter((item) => item !== field) }))
+    setForm((current) => current && { ...current, [axis]: { ...current[axis], [field]: value } })
   }
 
-  function inheritField(field: string, value: unknown) {
-    if (form) {
-      setResetFields((current) => current.includes(field) ? current : [...current, field])
-      setForm({ ...form, [field]: value } as EditableConfig)
-    }
+  function inheritField(axis: 'retrieval' | 'generation', field: string, value: unknown) {
+    setResetFields((current) => ({ ...current, [axis]: current[axis].includes(field) ? current[axis] : [...current[axis], field] }))
+    setForm((current) => current && { ...current, [axis]: { ...current[axis], [field]: value } })
   }
 
-  function draftOverrides<T extends Record<string, unknown>>(envelope: QualityProfileEnvelope<T>, candidate: T): Partial<T> {
-    const keys = new Set([
-      ...Object.keys(changedOverrides(envelope.active.effective, candidate)),
-      ...(envelope.draft?.changed_fields ?? []),
-    ])
-    resetFields.forEach((field) => keys.delete(field))
-    return Object.fromEntries([...keys].map((field) => [field, candidate[field]])) as Partial<T>
+  function changeDenseWeight(dense: number) {
+    const sparse = Math.round((1 - dense) * 100) / 100
+    setResetFields((current) => ({ ...current, retrieval: current.retrieval.filter((item) => item !== 'dense_weight' && item !== 'sparse_weight') }))
+    setForm((current) => current && { ...current, retrieval: { ...current.retrieval, dense_weight: dense, sparse_weight: sparse } })
   }
 
-  async function saveConfigDraft() {
-    if (!editableEnvelope || !form) return
-    const overrides = draftOverrides(editableEnvelope as QualityProfileEnvelope<Record<string, unknown>>, form)
-    if (!Object.keys(overrides).length && !resetFields.length) { setNotice(t('workspaceSettings.noChanges')); return }
+  function promptRouteOverrides(): Partial<PromptPolicy> | undefined {
+    if (!profile || !form) return undefined
+    const activeEffective = profile.active.prompt_policy.effective as unknown as PromptPolicy
+    const routes: PromptRoute[] = ['document_rag', 'no_retrieval']
+    const changedRoutes = routes.filter((route) => (
+      form.prompt_policy[route].mode !== activeEffective[route].mode
+      || (form.prompt_policy[route].instruction || '') !== (activeEffective[route].instruction || '')
+    ))
+    const draftChanged = profile.draft?.prompt_policy.changed_fields ?? []
+    const keys = new Set([...changedRoutes, ...draftChanged])
+    if (!keys.size) return undefined
+    return Object.fromEntries([...keys].map((route) => [route, {
+      mode: form.prompt_policy[route as PromptRoute].mode,
+      instruction: form.prompt_policy[route as PromptRoute].mode === 'replace' ? form.prompt_policy[route as PromptRoute].instruction : null,
+    }])) as Partial<PromptPolicy>
+  }
+
+  async function saveDraft() {
+    if (!profile || !form) return
+    const sections: SaveQualityProfileDraftInput = {}
+    const retrievalOverrides = axisOverrides(profile.active.retrieval.effective, form.retrieval, profile.draft?.retrieval.changed_fields ?? [], resetFields.retrieval)
+    if (Object.keys(retrievalOverrides).length || resetFields.retrieval.length) sections.retrieval = { overrides: retrievalOverrides, reset_fields: resetFields.retrieval }
+    const generationOverrides = axisOverrides(profile.active.generation.effective, form.generation, profile.draft?.generation.changed_fields ?? [], resetFields.generation)
+    if (Object.keys(generationOverrides).length || resetFields.generation.length) sections.generation = { overrides: generationOverrides, reset_fields: resetFields.generation }
+    const promptOverrides = promptRouteOverrides()
+    if (promptOverrides) sections.prompt_policy = promptOverrides
+
+    if (!Object.keys(sections).length) { setNotice(t('workspaceSettings.noChanges')); return }
     setBusy(true); setError(''); setNotice('')
     try {
-      if (tab === 'retrieval') await retrievalProfileApi.saveDraft(editableEnvelope.draft?.revision ?? 0, overrides as Partial<RetrievalConfig>, resetFields, note)
-      else await generationProfileApi.saveDraft(editableEnvelope.draft?.revision ?? 0, overrides as Partial<GenerationConfig>, resetFields, note)
-      await loadTab(tab); setNotice(t('workspaceSettings.draftSaved'))
-    } catch (saveError) { setError(errorMessage(saveError, t('workspaceSettings.saveFailed'))) }
-    finally { setBusy(false) }
-  }
-
-  async function savePromptDraft() {
-    if (!prompt || !promptForm) return
-    const keys = new Set([
-      ...Object.keys(changedOverrides(prompt.active.effective, promptForm)),
-      ...(prompt.draft?.changed_fields ?? []),
-    ])
-    const overrides = Object.fromEntries([...keys].map((route) => [route, promptForm[route]])) as Partial<PromptPolicy>
-    if (!Object.keys(overrides).length) { setNotice(t('workspaceSettings.noChanges')); return }
-    setBusy(true); setError(''); setNotice(''); setPromptPreview('')
-    try {
-      await promptProfileApi.saveDraft(prompt.draft?.revision ?? 0, overrides, note)
-      await loadTab(tab); setNotice(t('workspaceSettings.draftSaved'))
+      await qualityProfileApi.saveDraft(profile.draft?.revision ?? 0, sections, note)
+      await loadProfile(); setNotice(t('workspaceSettings.draftSaved'))
     } catch (saveError) { setError(errorMessage(saveError, t('workspaceSettings.saveFailed'))) }
     finally { setBusy(false) }
   }
 
   async function discardDraft() {
-    const envelope = currentEnvelope
-    if (!envelope?.draft || !window.confirm(t('workspaceSettings.discardConfirm'))) return
+    if (!profile?.draft || !window.confirm(t('workspaceSettings.discardConfirm'))) return
     setBusy(true); setError(''); setNotice('')
     try {
-      if (tab === 'retrieval') await retrievalProfileApi.discardDraft(envelope.draft.revision)
-      else if (tab === 'generation') await generationProfileApi.discardDraft(envelope.draft.revision)
-      else if (tab === 'prompt_policy') await promptProfileApi.discardDraft(envelope.draft.revision)
-      await loadTab(tab); setNotice(t('workspaceSettings.draftDiscarded'))
+      await qualityProfileApi.discardDraft(profile.draft.revision)
+      await loadProfile(); setNotice(t('workspaceSettings.draftDiscarded'))
     } catch (discardError) { setError(errorMessage(discardError, t('workspaceSettings.discardFailed'))) }
     finally { setBusy(false) }
   }
 
   async function applyDraft() {
-    const envelope = currentEnvelope
-    if (!envelope?.draft || !window.confirm(t('workspaceSettings.applyConfirm'))) return
+    if (!profile?.draft || !window.confirm(t('workspaceSettings.applyConfirm'))) return
     setBusy(true); setError(''); setNotice('')
     try {
-      const runUid = envelope.draft.validation.last_run_uid
-      if (tab === 'retrieval') await retrievalProfileApi.apply(envelope.draft.revision, runUid, allowUnverified, note)
-      else if (tab === 'generation') await generationProfileApi.apply(envelope.draft.revision, runUid, allowUnverified, note)
-      else if (tab === 'prompt_policy') await promptProfileApi.apply(envelope.draft.revision, runUid, allowUnverified, note)
-      setAllowUnverified(false); await loadTab(tab); setNotice(t('workspaceSettings.applied'))
+      const runUid = profile.draft.validation.last_run_uid
+      await qualityProfileApi.apply(profile.draft.revision, runUid, allowUnverified, note)
+      setAllowUnverified(false); await loadProfile(); setNotice(t('workspaceSettings.applied'))
     } catch (applyError) { setError(errorMessage(applyError, t('workspaceSettings.applyFailed'))) }
     finally { setBusy(false) }
   }
 
   async function previewPrompt() {
-    if (!prompt?.draft) { setError(t('workspaceSettings.saveBeforePreview')); return }
+    if (!profile?.draft) { setError(t('workspaceSettings.saveBeforePreview')); return }
     setBusy(true); setError(''); setPromptPreview('')
     try {
-      const preview = await promptProfileApi.preview(prompt.draft.revision, promptRoute)
+      const preview = await qualityProfileApi.previewPrompt(profile.draft.revision, promptRoute)
       setPromptPreview(preview.assembled_prompt)
     } catch (previewError) { setError(errorMessage(previewError, t('workspaceSettings.previewFailed'))) }
     finally { setBusy(false) }
@@ -490,17 +538,17 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
   async function importPromptFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (!file || !promptForm) return
+    if (!file || !form) return
     const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'))
     if (!['.txt', '.md'].includes(extension)) {
       setError(t('workspaceSettings.promptFileTypeError'))
       return
     }
     try {
-      const instruction = (await file.text()).replace(/^\uFEFF/, '').trim()
+      const instruction = (await file.text()).replace(/^﻿/, '').trim()
       if (!instruction) throw new Error(t('workspaceSettings.promptFileEmpty'))
       if (instruction.length > 12_000) throw new Error(t('workspaceSettings.promptFileTooLarge'))
-      setPromptForm({ ...promptForm, [promptRoute]: { mode: 'replace', instruction } })
+      setForm({ ...form, prompt_policy: { ...form.prompt_policy, [promptRoute]: { mode: 'replace', instruction } } })
       setError('')
       setNotice(t('workspaceSettings.promptFileLoaded', { name: file.name }))
       setPromptPreview('')
@@ -510,7 +558,7 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
   }
 
   function selectTab(next: SettingsTab) {
-    setAdvanced(false); setPromptPreview(''); setAllowUnverified(false); setTab(next)
+    setPromptPreview(''); setAllowUnverified(false); setTab(next)
   }
 
   useEffect(() => {
@@ -521,7 +569,7 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
         if (!alive) return
         setEvalRun(result.run)
         if (result.run.status === 'succeeded') {
-          retrievalProfileApi.get().then((refreshed) => { if (alive) setRetrieval(refreshed) }).catch(() => {})
+          qualityProfileApi.get().then((refreshed) => { if (alive) setProfile(refreshed) }).catch(() => {})
         }
       }).catch(() => {})
     }, 2000)
@@ -545,22 +593,24 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
   }
 
   async function runEvaluation() {
-    if (!retrieval?.draft || !evalDatasetUid || evalBusy) return
+    if (!evalDraftRevision || !evalDatasetUid || evalBusy) return
     setEvalBusy(true); setEvalError(''); setEvalRun(null)
     try {
-      const started = await evaluationRunApi.startRetrieval(retrieval.draft.revision, evalDatasetUid)
+      const started = await evaluationRunApi.startRetrieval(evalDraftRevision, evalDatasetUid)
       setEvalRun(started.run)
     } catch (runError) {
       setEvalError(errorMessage(runError, t('workspaceSettings.evalRunFailed')))
     } finally { setEvalBusy(false) }
   }
 
+  const evalDraftRevision = profile?.draft?.revision
+
   return <section className="panel settings-panel quality-settings">
     <div className="panel-title quality-heading"><div><span className="eyebrow">{t('workspaceSettings.eyebrow')}</span><h2>{t('workspaceSettings.title')}</h2><p>{t('workspaceSettings.description')}</p></div>{policy && <span className="quality-runtime"><i className={`status-dot ${policy.rag.available ? '' : 'warn'}`} />{policyLoading ? t('state.loadingTitle') : t('workspaceSettings.runtimeManaged')}</span>}</div>
     {(policyFailed || error) && <div className="settings-error" role="alert">{error || t('workspaceSettings.loadFailed')}</div>}
     {notice && <div className="quality-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
 
-    <nav className="quality-tabs" aria-label={t('workspaceSettings.sections')}>{(['general', 'retrieval', 'generation', 'prompt_policy', 'evaluation'] as SettingsTab[]).map((key) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => selectTab(key)}>{t(`workspaceSettings.tab.${key}` as TranslationKey)}</button>)}</nav>
+    <nav className="quality-tabs" aria-label={t('workspaceSettings.sections')}>{(['general', 'parameters', 'evaluation'] as SettingsTab[]).map((key) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => selectTab(key)}>{t(`workspaceSettings.tab.${key}` as TranslationKey)}</button>)}</nav>
 
     {tab === 'general' ? <GeneralSettingsPanel />
       : loading ? <div className="quality-loading"><Icon name="refresh" /><span>{t('state.loadingTitle')}</span></div>
@@ -569,10 +619,10 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
         <div className="quality-flow"><span><b>1</b>{t('workspaceSettings.flowDataset')}</span><i /><span><b>2</b>{t('workspaceSettings.flowDraft')}</span><i /><span><b>3</b>{t('workspaceSettings.flowCompare')}</span><i /><span><b>4</b>{t('workspaceSettings.flowApply')}</span></div>
         <p className="quality-axis-note-line">{t('workspaceSettings.evalRetrievalOnlyNote')}</p>
 
-        {!retrieval?.draft ? <div className="quality-callout">
+        {!evalDraftRevision ? <div className="quality-callout">
           <Icon name="sparkles" />
           <div><strong>{t('workspaceSettings.evalNeedsDraftTitle')}</strong><p>{t('workspaceSettings.evalNeedsDraftDescription')}</p></div>
-          <button type="button" className="secondary-button" onClick={() => selectTab('retrieval')}>{t('workspaceSettings.openDraft')}</button>
+          <button type="button" className="secondary-button" onClick={() => selectTab('parameters')}>{t('workspaceSettings.openDraft')}</button>
         </div> : <div className="quality-eval-config">
           <div className="quality-eval-dataset-row">
             <label><span>{t('workspaceSettings.evalDatasetLabel')}</span>
@@ -606,42 +656,59 @@ export function WorkspaceSettingsFeature({ policy, loading: policyLoading, faile
             <div><strong>{evalRun.metrics.chunk_count}</strong><small>{t('workspaceSettings.evalMetricChunks')}</small></div>
           </div>}
           {evalRun.status === 'succeeded' && <p className="quality-eval-verified-note">{t('workspaceSettings.evalVerifiedNotice')}</p>}
-          {evalRun.status === 'succeeded' && <button type="button" className="secondary-button" onClick={() => selectTab('retrieval')}>{t('workspaceSettings.evalGoApply')}</button>}
+          {evalRun.status === 'succeeded' && <button type="button" className="secondary-button" onClick={() => selectTab('parameters')}>{t('workspaceSettings.evalGoApply')}</button>}
           {evalRun.status === 'failed' && <p className="dialog-error" role="alert">{evalRun.error_message}</p>}
         </div>}
 
         <div className="quality-section-head versions"><div><h3>{t('workspaceSettings.historyTitle')}</h3><p>{t('workspaceSettings.historyDescription')}</p></div></div>
-        <div className="quality-version-list">{versions.length ? versions.map((version) => <div key={version.uid}><span><b>v{version.version}</b><em>{t(`workspaceSettings.tab.${version.change_axis}` as TranslationKey)}</em></span><span><strong>{version.note || t('workspaceSettings.noNote')}</strong><small>{formatDate(version.applied_at, locale)}</small></span><span className={`quality-status ${validationTone(version.validation.state)}`}>{t(`workspaceSettings.validation.${version.validation.state}` as TranslationKey)}</span></div>) : <p>{t('workspaceSettings.noHistory')}</p>}</div>
+        <div className="quality-version-list">{versions.length ? versions.map((version) => <div key={version.uid}><span><b>v{version.version}</b>{version.changed_axes.map((axis) => <em key={axis}>{t(`workspaceSettings.axisLabel.${axis}` as TranslationKey)}</em>)}</span><span><strong>{version.note || t('workspaceSettings.noNote')}</strong><small>{formatDate(version.applied_at, locale)}</small></span><span className={`quality-status ${validationTone(version.validation.state)}`}>{t(`workspaceSettings.validation.${version.validation.state}` as TranslationKey)}</span></div>) : <p>{t('workspaceSettings.noHistory')}</p>}</div>
       </div>
-      : currentEnvelope ? <>
-        <div className="quality-revision-grid"><ProfileSummary revision={currentEnvelope.active} kind="active" />{currentEnvelope.draft ? <ProfileSummary revision={currentEnvelope.draft} kind="draft" /> : <div className="quality-revision empty"><strong>{t('workspaceSettings.noDraft')}</strong><small>{t('workspaceSettings.noDraftDescription')}</small></div>}</div>
-        {draftConflict && <div className="quality-conflict"><Icon name="clock" /><div><strong>{t('workspaceSettings.draftConflict', { axis: t(`workspaceSettings.tab.${draftConflict.change_axis}` as TranslationKey) })}</strong><p>{t('workspaceSettings.draftConflictDescription')}</p></div><button type="button" className="secondary-button" onClick={() => selectTab(draftConflict.change_axis)}>{t('workspaceSettings.openDraft')}</button></div>}
-        {!currentEnvelope.permissions.can_edit && <div className="quality-readonly"><Icon name="users" /><span><strong>{t('workspaceSettings.readonlyTitle')}</strong><small>{t('workspaceSettings.readonlyDescription')}</small></span></div>}
+      : profile && form ? <div className="quality-profile-editor">
+        <div className="quality-revision-grid"><ProfileSummary revision={profile.active} kind="active" />{profile.draft ? <ProfileSummary revision={profile.draft} kind="draft" /> : <div className="quality-revision empty"><strong>{t('workspaceSettings.noDraft')}</strong><small>{t('workspaceSettings.noDraftDescription')}</small></div>}</div>
+        {!profile.permissions.can_edit && <div className="quality-readonly"><Icon name="users" /><span><strong>{t('workspaceSettings.readonlyTitle')}</strong><small>{t('workspaceSettings.readonlyDescription')}</small></span></div>}
 
-        {tab === 'prompt_policy' && prompt && promptForm ? <div className="quality-prompt">
-          <div className="quality-section-head"><div><h3>{t('workspaceSettings.promptTitle')}</h3><p>{t('workspaceSettings.promptDescription')}</p></div></div>
+        <div className="quality-notice merge-note" role="note"><Icon name="layers" size={14} /><span><strong>{t('workspaceSettings.mergeNoticeTitle')}</strong><small>{t('workspaceSettings.mergeNoticeDescription')}</small></span></div>
+
+        <ParamGroup titleKey="workspaceSettings.group.retrievalWeights" helpKey="workspaceSettings.groupHelp.retrievalWeights" axis="retrieval">
+          <div className="quality-field">
+            <div className="quality-field-head"><span><strong>{t('workspaceSettings.field.dense_weight')} / {t('workspaceSettings.field.sparse_weight')}</strong><small>{t('workspaceSettings.fieldHelp.dense_weight')}</small></span></div>
+            <DualWeightSlider dense={Number(form.retrieval.dense_weight)} disabled={editDisabled} onChange={changeDenseWeight} />
+          </div>
+          {RETRIEVAL_WEIGHT_FIELDS.map((field) => <FieldRow key={String(field)} name={String(field)} schema={retrievalSchema[String(field)]} value={form.retrieval[field]} activeValue={profile.active.retrieval.effective[field]} defaultValue={profile.defaults.retrieval[field]} disabled={editDisabled} onChange={(value) => changeField('retrieval', String(field), value)} onRestore={() => changeField('retrieval', String(field), profile.active.retrieval.effective[field])} onReset={() => inheritField('retrieval', String(field), profile.defaults.retrieval[field])} />)}
+        </ParamGroup>
+
+        <ParamGroup titleKey="workspaceSettings.group.documentPooling" helpKey="workspaceSettings.groupHelp.documentPooling" axis="retrieval">
+          {POOLING_FIELDS.map((field) => <FieldRow key={String(field)} name={String(field)} schema={retrievalSchema[String(field)]} value={form.retrieval[field]} activeValue={profile.active.retrieval.effective[field]} defaultValue={profile.defaults.retrieval[field]} disabled={editDisabled} onChange={(value) => changeField('retrieval', String(field), value)} onRestore={() => changeField('retrieval', String(field), profile.active.retrieval.effective[field])} onReset={() => inheritField('retrieval', String(field), profile.defaults.retrieval[field])} />)}
+        </ParamGroup>
+
+        <ParamGroup titleKey="workspaceSettings.group.resultExposure" helpKey="workspaceSettings.groupHelp.resultExposure" axis="retrieval">
+          {EXPOSURE_FIELDS.map((field) => <FieldRow key={String(field)} name={String(field)} schema={retrievalSchema[String(field)]} value={form.retrieval[field]} activeValue={profile.active.retrieval.effective[field]} defaultValue={profile.defaults.retrieval[field]} disabled={editDisabled} onChange={(value) => changeField('retrieval', String(field), value)} onRestore={() => changeField('retrieval', String(field), profile.active.retrieval.effective[field])} onReset={() => inheritField('retrieval', String(field), profile.defaults.retrieval[field])} />)}
+        </ParamGroup>
+
+        {Number(form.retrieval.dense_weight) + Number(form.retrieval.sparse_weight) !== 1 && <p className="quality-inline-warning">{t('workspaceSettings.weightWarning')}</p>}
+
+        <ParamGroup titleKey="workspaceSettings.group.generation" helpKey="workspaceSettings.groupHelp.generation" axis="generation">
+          {GENERATION_FIELDS.map((field) => <FieldRow key={String(field)} name={String(field)} schema={generationSchema[String(field)]} value={form.generation[field]} activeValue={profile.active.generation.effective[field]} defaultValue={profile.defaults.generation[field]} disabled={editDisabled} onChange={(value) => changeField('generation', String(field), value)} onRestore={() => changeField('generation', String(field), profile.active.generation.effective[field])} onReset={() => inheritField('generation', String(field), profile.defaults.generation[field])} />)}
+        </ParamGroup>
+
+        <section className="quality-param-group quality-prompt">
+          <div className="quality-section-head"><div><h3>{t('workspaceSettings.group.promptPolicy')}</h3><p>{t('workspaceSettings.groupHelp.promptPolicy')}</p></div></div>
           <div className="prompt-route-tabs">{(['document_rag', 'no_retrieval'] as PromptRoute[]).map((route) => <button type="button" className={promptRoute === route ? 'active' : ''} onClick={() => { setPromptRoute(route); setPromptPreview('') }} key={route}>{t(`workspaceSettings.promptRoute.${route}` as TranslationKey)}</button>)}</div>
-          <div className="fixed-contract-note"><Icon name="layers" size={16} /><span><strong>{t('workspaceSettings.fixedContract')}</strong><small>{prompt.fixed_contract || t('workspaceSettings.fixedContractDescription')}</small></span></div>
-          <div className="prompt-mode-row"><label><input type="radio" name="prompt-mode" value="inherit" checked={promptForm[promptRoute].mode === 'inherit'} disabled={editDisabled} onChange={() => setPromptForm({ ...promptForm, [promptRoute]: { mode: 'inherit', instruction: null } })} /><span><strong>{t('workspaceSettings.promptInherit')}</strong><small>{t('workspaceSettings.promptInheritDescription')}</small></span></label><label><input type="radio" name="prompt-mode" value="replace" checked={promptForm[promptRoute].mode === 'replace'} disabled={editDisabled} onChange={() => setPromptForm({ ...promptForm, [promptRoute]: { mode: 'replace', instruction: promptForm[promptRoute].instruction || '' } })} /><span><strong>{t('workspaceSettings.promptReplace')}</strong><small>{t('workspaceSettings.promptReplaceDescription')}</small></span></label></div>
+          <div className="fixed-contract-note"><Icon name="layers" size={16} /><span><strong>{t('workspaceSettings.fixedContract')}</strong><small>{profile.fixed_contract || t('workspaceSettings.fixedContractDescription')}</small></span></div>
+          <div className="prompt-mode-row"><label><input type="radio" name="prompt-mode" value="inherit" checked={form.prompt_policy[promptRoute].mode === 'inherit'} disabled={editDisabled} onChange={() => setForm({ ...form, prompt_policy: { ...form.prompt_policy, [promptRoute]: { mode: 'inherit', instruction: null } } })} /><span><strong>{t('workspaceSettings.promptInherit')}</strong><small>{t('workspaceSettings.promptInheritDescription')}</small></span></label><label><input type="radio" name="prompt-mode" value="replace" checked={form.prompt_policy[promptRoute].mode === 'replace'} disabled={editDisabled} onChange={() => setForm({ ...form, prompt_policy: { ...form.prompt_policy, [promptRoute]: { mode: 'replace', instruction: form.prompt_policy[promptRoute].instruction || '' } } })} /><span><strong>{t('workspaceSettings.promptReplace')}</strong><small>{t('workspaceSettings.promptReplaceDescription')}</small></span></label></div>
           <div className="prompt-import-row"><label className={`secondary-button ${editDisabled ? 'disabled' : ''}`}><Icon name="upload" size={14} />{t('workspaceSettings.promptImport')}<input type="file" accept=".txt,.md,text/plain,text/markdown" disabled={editDisabled} onChange={(event) => void importPromptFile(event)} /></label><small>{t('workspaceSettings.promptImportDescription')}</small></div>
-          {promptForm[promptRoute].mode === 'replace' && <label className="prompt-editor"><span><strong>{t('workspaceSettings.workspaceInstruction')}</strong><small>{(promptForm[promptRoute].instruction || '').length} / 12,000</small></span><textarea disabled={editDisabled} maxLength={12000} value={promptForm[promptRoute].instruction || ''} placeholder={t('workspaceSettings.promptPlaceholder')} onChange={(event) => setPromptForm({ ...promptForm, [promptRoute]: { mode: 'replace', instruction: event.target.value } })} /></label>}
-          {prompt.provider_disclosure && <p className="provider-disclosure">{prompt.provider_disclosure}</p>}
-          <div className="prompt-preview-actions"><button type="button" className="secondary-button" disabled={busy || !prompt.draft} onClick={() => void previewPrompt()}>{t('workspaceSettings.preview')}</button><small>{t('workspaceSettings.previewDescription')}</small></div>
+          {form.prompt_policy[promptRoute].mode === 'replace' && <label className="prompt-editor"><span><strong>{t('workspaceSettings.workspaceInstruction')}</strong><small>{(form.prompt_policy[promptRoute].instruction || '').length} / 12,000</small></span><textarea disabled={editDisabled} maxLength={12000} value={form.prompt_policy[promptRoute].instruction || ''} placeholder={t('workspaceSettings.promptPlaceholder')} onChange={(event) => setForm({ ...form, prompt_policy: { ...form.prompt_policy, [promptRoute]: { mode: 'replace', instruction: event.target.value } } })} /></label>}
+          {profile.provider_disclosure && <p className="provider-disclosure">{profile.provider_disclosure}</p>}
+          <div className="prompt-preview-actions"><button type="button" className="secondary-button" disabled={busy || !profile.draft} onClick={() => void previewPrompt()}>{t('workspaceSettings.preview')}</button><small>{t('workspaceSettings.previewDescription')}</small></div>
           {promptPreview && <pre className="prompt-preview">{promptPreview}</pre>}
-          <DraftActions envelope={prompt} busy={busy} note={note} setNote={setNote} allowUnverified={allowUnverified} setAllowUnverified={setAllowUnverified} onSave={() => void savePromptDraft()} onDiscard={() => void discardDraft()} onApply={() => void applyDraft()} />
-        </div>
-          : editableEnvelope && form ? <div className="quality-profile-editor">
-            <div className="quality-section-head"><div><h3>{t(`workspaceSettings.${tab}Title` as TranslationKey)}</h3><p>{t(`workspaceSettings.${tab}Description` as TranslationKey)}</p></div><span className="quality-axis-note">{t('workspaceSettings.oneAxisOnly')}</span></div>
-            <div className="quality-field-grid">{visibleFields.map((field) => <FieldEditor key={String(field)} name={String(field)} value={form[field]} activeValue={editableEnvelope.active.effective[field]} defaultValue={editableEnvelope.defaults[field]} schema={effectiveSchema[String(field)]} disabled={editDisabled} onChange={(value) => changeField(String(field), value)} onRestore={() => changeField(String(field), editableEnvelope.active.effective[field])} onReset={() => inheritField(String(field), editableEnvelope.defaults[field])} />)}</div>
-            <button type="button" className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}><Icon name="chevron" size={13} />{advanced ? t('workspaceSettings.hideAdvanced') : t('workspaceSettings.showAdvanced')}</button>
-            {tab === 'retrieval' && Number(form.dense_weight) + Number(form.sparse_weight) !== 1 && <p className="quality-inline-warning">{t('workspaceSettings.weightWarning')}</p>}
-            {tab === 'retrieval' && retrieval
-              ? <DraftActions envelope={retrieval} busy={busy} note={note} setNote={setNote} allowUnverified={allowUnverified} setAllowUnverified={setAllowUnverified} onSave={() => void saveConfigDraft()} onDiscard={() => void discardDraft()} onApply={() => void applyDraft()} />
-              : tab === 'generation' && generation
-                ? <DraftActions envelope={generation} busy={busy} note={note} setNote={setNote} allowUnverified={allowUnverified} setAllowUnverified={setAllowUnverified} onSave={() => void saveConfigDraft()} onDiscard={() => void discardDraft()} onApply={() => void applyDraft()} />
-                : null}
-          </div> : null}
-      </>
+        </section>
+
+        <ParamGroup titleKey="workspaceSettings.group.compression" helpKey="workspaceSettings.groupHelp.compression" axis="retrieval">
+          <FieldRow name="contextual_compression" schema={retrievalSchema.contextual_compression} value={form.retrieval.contextual_compression} activeValue={profile.active.retrieval.effective.contextual_compression} defaultValue={profile.defaults.retrieval.contextual_compression} disabled={editDisabled} onChange={(value) => changeField('retrieval', 'contextual_compression', value)} onRestore={() => changeField('retrieval', 'contextual_compression', profile.active.retrieval.effective.contextual_compression)} onReset={() => inheritField('retrieval', 'contextual_compression', profile.defaults.retrieval.contextual_compression)} />
+        </ParamGroup>
+
+        <DraftActions profile={profile} busy={busy} note={note} setNote={setNote} allowUnverified={allowUnverified} setAllowUnverified={setAllowUnverified} onSave={() => void saveDraft()} onDiscard={() => void discardDraft()} onApply={() => void applyDraft()} />
+      </div>
         : <div className="quality-empty"><Icon name="settings" /><strong>{t('workspaceSettings.apiUnavailable')}</strong><p>{t('workspaceSettings.apiUnavailableDescription')}</p></div>}
   </section>
 }

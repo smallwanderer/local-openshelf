@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from llm_installation.memory_reservations import claim_llm_runtime
+
 RUNTIME_IMAGE = {
     "llama.cpp": "dotori/llama-rag",
     "vllm": "dotori/vllm-rag",
@@ -290,6 +292,17 @@ class RuntimeLifecycleManager:
             encoding="utf-8",
         )
         os.replace(temporary, path)
+
+        # Claim memory once the runtime is actually serving. Every status
+        # transition funnels through here, so this covers both apply() and
+        # resume(). A non-healthy status does not release the claim: the
+        # container still exists and is expected to come back, and the
+        # embedding side must not size itself into memory that is about to be
+        # reoccupied. Only an explicit removal releases it.
+        if status == "healthy":
+            claim_llm_runtime(
+                spec.scope, spec.generation_id, repo_root=self.repo_root
+            )
 
     def _restore_runtime_status(self, scope: str, payload: dict) -> None:
         path = runtime_status_path(scope, repo_root=self.repo_root)

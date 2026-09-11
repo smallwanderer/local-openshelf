@@ -20,11 +20,11 @@ def _parse_retry_after(response) -> float:
 
 
 def _embedding_service_url() -> str:
-    return os.getenv("EMBEDDING_SERVICE_URL", "http://dotori-document:8001")
+    return os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-executor:8001")
 
 
 def _embedding_service_timeout() -> float:
-    # Model loads lazily on dotori-document's first request after a restart
+    # A local model loads lazily on embedding-executor's first request after a restart
     # (no GPU, this can take tens of seconds); steady-state calls are ~1-2s.
     # The timeout must cover that one-time cold start, not just the warm case.
     raw_value = os.getenv("EMBEDDING_SERVICE_TIMEOUT", "60")
@@ -32,6 +32,20 @@ def _embedding_service_timeout() -> float:
         return float(raw_value)
     except (TypeError, ValueError):
         return 60.0
+
+
+def _embedding_batch_service_timeout() -> float:
+    """Allow CPU document batches longer than latency-sensitive queries.
+
+    A document batch can legitimately take more than the query-oriented 60s
+    timeout on CPU. Keep the two failure-detection budgets independent so a
+    larger ingestion timeout does not make interactive query failures slower.
+    """
+    raw_value = os.getenv("EMBEDDING_BATCH_SERVICE_TIMEOUT", "180")
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return 180.0
 
 
 def _auth_headers() -> dict[str, str]:
@@ -42,9 +56,9 @@ def _auth_headers() -> dict[str, str]:
 
 
 class RemoteEmbeddingProxyProvider:
-    """Proxy to dotori-document's internal /embed endpoint for both query and
+    """Proxy to embedding-executor's internal /embed endpoint for both query and
     document embedding. Models (BGE-M3, SentenceTransformers, etc.) load in
-    exactly one process (dotori-document's model-owning gunicorn worker) so they
+    exactly one process (embedding-executor's model-owning gunicorn worker) so they
     aren't duplicated across processes and competing for GPU/CPU.
     This provider never loads the model itself.
     """
@@ -99,22 +113,22 @@ class RemoteEmbeddingProxyProvider:
                 f"{_embedding_service_url()}/embed/",
                 json={"input_type": "document", "texts": texts, "max_length": max_length},
                 headers=_auth_headers(),
-                timeout=_embedding_service_timeout(),
+                timeout=_embedding_batch_service_timeout(),
             )
         except requests.RequestException as exc:
-            raise RuntimeError(f"dotori-document batch document embedding request failed: {exc}") from exc
+            raise RuntimeError(f"embedding-executor batch document embedding request failed: {exc}") from exc
 
         if response.status_code == 503:
             retry_after = _parse_retry_after(response)
             raise EmbeddingBusyError(
-                f"dotori-document is busy (EMBEDDING_BUSY), retry after {retry_after}s",
+                f"embedding-executor is busy (EMBEDDING_BUSY), retry after {retry_after}s",
                 retry_after_seconds=retry_after,
             )
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
             raise RuntimeError(
-                f"dotori-document batch document embedding failed: HTTP {response.status_code}"
+                f"embedding-executor batch document embedding failed: HTTP {response.status_code}"
             ) from exc
 
         payload = response.json()
@@ -139,20 +153,20 @@ class RemoteEmbeddingProxyProvider:
             )
         except requests.RequestException as exc:
             raise RuntimeError(
-                f"dotori-document {input_type} embedding request failed: {exc}"
+                f"embedding-executor {input_type} embedding request failed: {exc}"
             ) from exc
 
         if response.status_code == 503:
             retry_after = _parse_retry_after(response)
             raise EmbeddingBusyError(
-                f"dotori-document is busy (EMBEDDING_BUSY), retry after {retry_after}s",
+                f"embedding-executor is busy (EMBEDDING_BUSY), retry after {retry_after}s",
                 retry_after_seconds=retry_after,
             )
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
             raise RuntimeError(
-                f"dotori-document {input_type} embedding failed: HTTP {response.status_code}"
+                f"embedding-executor {input_type} embedding failed: HTTP {response.status_code}"
             ) from exc
 
         payload = response.json()

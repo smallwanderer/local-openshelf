@@ -77,15 +77,12 @@ class APIToken(models.Model):
         related_name="api_tokens",
     )
     key = models.CharField(
-        max_length=64, unique=True, db_index=True, default=_generate_token_key
+        max_length=64, unique=True, default=_generate_token_key
     )
     name = models.CharField(max_length=128, help_text="Token purpose description")
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-
-    class Meta:
-        indexes = [models.Index(fields=["key"])]
 
     def __str__(self):
         return f"{self.name} ({self.user.email})"
@@ -110,16 +107,13 @@ class CLIToken(models.Model):
         on_delete=models.CASCADE,
         related_name="cli_tokens",
     )
-    key_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    key_hash = models.CharField(max_length=64, unique=True)
     prefix = models.CharField(max_length=20)
     name = models.CharField(max_length=128, help_text="Token purpose description")
     scopes = models.JSONField(default=default_cli_token_scopes)
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-
-    class Meta:
-        indexes = [models.Index(fields=["key_hash"])]
 
     def has_scope(self, scope):
         return scope in (self.scopes or [])

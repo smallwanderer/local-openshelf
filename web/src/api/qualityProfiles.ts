@@ -4,50 +4,6 @@ export type QualityAxis = 'retrieval' | 'generation' | 'prompt_policy'
 export type ProfileStatus = 'draft' | 'active' | 'archived'
 export type ValidationState = 'verified' | 'unverified' | 'stale' | 'rollback' | 'not_run'
 
-export interface QualityProfileRevision<T extends Record<string, unknown>> {
-  uid: string
-  version: number
-  revision: number
-  status: ProfileStatus
-  change_axis: QualityAxis | null
-  based_on_uid: string | null
-  overrides: Partial<T>
-  effective: T
-  changed_fields: string[]
-  validation: {
-    state: ValidationState
-    last_run_uid: string | null
-    warnings: string[]
-  }
-  note: string
-  updated_at: string
-  applied_at: string | null
-}
-
-export interface ProfilePermissions {
-  can_read: boolean
-  can_edit: boolean
-  can_apply: boolean
-}
-
-export interface DraftConflict {
-  change_axis: QualityAxis
-  uid: string
-}
-
-export interface QualityProfileEnvelope<T extends Record<string, unknown>> {
-  ok: true
-  workspace_uid: string
-  axis: QualityAxis
-  active: QualityProfileRevision<T>
-  draft: QualityProfileRevision<T> | null
-  defaults: T
-  schema: Record<string, QualityFieldSchema>
-  capabilities: Record<string, unknown>
-  permissions: ProfilePermissions
-  draft_conflict?: DraftConflict | null
-}
-
 export interface QualityFieldSchema {
   type: 'number' | 'integer' | 'boolean' | 'enum' | 'string'
   tier: 'core' | 'advanced'
@@ -98,9 +54,62 @@ export interface PromptPolicy extends Record<string, unknown> {
   no_retrieval: PromptRoutePolicy
 }
 
-export interface PromptProfileEnvelope extends QualityProfileEnvelope<PromptPolicy> {
-  fixed_contract?: string
-  provider_disclosure?: string | null
+export interface AxisSection<T> {
+  overrides: Partial<T>
+  effective: T
+  changed_fields: string[]
+}
+
+export interface QualityProfileRow {
+  uid: string
+  version: number
+  revision: number
+  status: ProfileStatus
+  changed_axes: QualityAxis[]
+  based_on_uid: string | null
+  retrieval: AxisSection<RetrievalConfig>
+  generation: AxisSection<GenerationConfig>
+  prompt_policy: AxisSection<PromptPolicy>
+  validation: {
+    state: ValidationState
+    last_run_uid: string | null
+    warnings: string[]
+  }
+  note: string
+  created_at: string
+  updated_at: string
+  applied_at: string | null
+}
+
+export interface ProfilePermissions {
+  can_read: boolean
+  can_edit: boolean
+  can_apply: boolean
+}
+
+export interface QualityProfileEnvelope {
+  ok: true
+  workspace_uid: string
+  active: QualityProfileRow
+  draft: QualityProfileRow | null
+  defaults: {
+    retrieval: RetrievalConfig
+    generation: GenerationConfig
+    prompt_policy: Record<PromptRoute, PromptRoutePolicy>
+  }
+  schema: {
+    retrieval: Record<string, QualityFieldSchema>
+    generation: Record<string, QualityFieldSchema>
+  }
+  capabilities: {
+    schema_version: number
+    server_prompt_contract_version: number
+    max_instruction_chars: number
+    import_extensions: string[]
+  }
+  permissions: ProfilePermissions
+  fixed_contract: string
+  provider_disclosure: string | null
 }
 
 export interface PromptPreview {
@@ -112,54 +121,34 @@ export interface PromptPreview {
   server_prompt_contract_version: number
 }
 
-interface DraftMutation<T extends Record<string, unknown>> {
+interface DraftMutation {
   ok: true
-  draft: QualityProfileRevision<T> | null
+  draft: QualityProfileRow | null
 }
 
 const BASE = '/api/workspaces/v1/current'
 
-function profileApi<T extends Record<string, unknown>>(path: string) {
-  return {
-    get: () => apiRequest<QualityProfileEnvelope<T>>(`${BASE}/${path}/`),
-    saveDraft: (expectedRevision: number, overrides: Partial<T>, resetFields: string[], note: string) => apiRequest<DraftMutation<T>>(`${BASE}/${path}/draft/`, {
-      method: 'PATCH',
-      json: { expected_revision: expectedRevision, overrides, reset_fields: resetFields, note },
-    }),
-    discardDraft: (expectedRevision: number) => apiRequest<DraftMutation<T>>(`${BASE}/${path}/draft/discard/`, {
-      method: 'POST',
-      json: { expected_revision: expectedRevision },
-    }),
-    apply: (expectedRevision: number, evaluationRunUid: string | null, allowUnverified: boolean, note: string) => apiRequest<QualityProfileEnvelope<T>>(`${BASE}/${path}/apply/`, {
-      method: 'POST',
-      json: {
-        expected_revision: expectedRevision,
-        evaluation_run_uid: evaluationRunUid,
-        allow_unverified: allowUnverified,
-        note,
-      },
-    }),
-  }
+export interface SaveQualityProfileDraftInput {
+  retrieval?: { overrides: Partial<RetrievalConfig>; reset_fields: string[] }
+  generation?: { overrides: Partial<GenerationConfig>; reset_fields: string[] }
+  prompt_policy?: Partial<PromptPolicy>
 }
 
-export const retrievalProfileApi = profileApi<RetrievalConfig>('retrieval-profile')
-export const generationProfileApi = profileApi<GenerationConfig>('generation-profile')
-
-export const promptProfileApi = {
-  get: () => apiRequest<PromptProfileEnvelope>(`${BASE}/system-prompt/`),
-  saveDraft: (expectedRevision: number, overrides: Partial<PromptPolicy>, note: string) => apiRequest<DraftMutation<PromptPolicy>>(`${BASE}/system-prompt/draft/`, {
+export const qualityProfileApi = {
+  get: () => apiRequest<QualityProfileEnvelope>(`${BASE}/quality-profile/`),
+  saveDraft: (expectedRevision: number, sections: SaveQualityProfileDraftInput, note: string) => apiRequest<DraftMutation>(`${BASE}/quality-profile/draft/`, {
     method: 'PATCH',
-    json: { expected_revision: expectedRevision, overrides, note },
+    json: { expected_revision: expectedRevision, note, ...sections },
   }),
-  discardDraft: (expectedRevision: number) => apiRequest<DraftMutation<PromptPolicy>>(`${BASE}/system-prompt/draft/discard/`, {
+  discardDraft: (expectedRevision: number) => apiRequest<DraftMutation>(`${BASE}/quality-profile/draft/discard/`, {
     method: 'POST',
     json: { expected_revision: expectedRevision },
   }),
-  preview: (expectedRevision: number, route: PromptRoute) => apiRequest<PromptPreview>(`${BASE}/system-prompt/draft/preview/`, {
+  previewPrompt: (expectedRevision: number, route: PromptRoute) => apiRequest<PromptPreview>(`${BASE}/quality-profile/draft/preview-prompt/`, {
     method: 'POST',
     json: { expected_revision: expectedRevision, route },
   }),
-  apply: (expectedRevision: number, evaluationRunUid: string | null, allowUnverified: boolean, note: string) => apiRequest<PromptProfileEnvelope>(`${BASE}/system-prompt/apply/`, {
+  apply: (expectedRevision: number, evaluationRunUid: string | null, allowUnverified: boolean, note: string) => apiRequest<QualityProfileEnvelope>(`${BASE}/quality-profile/apply/`, {
     method: 'POST',
     json: {
       expected_revision: expectedRevision,
@@ -168,23 +157,17 @@ export const promptProfileApi = {
       note,
     },
   }),
+  listVersions: () => apiRequest<{ ok: true; results: QualityProfileVersionSummary[] }>(`${BASE}/quality-profile/versions/?page=1&limit=20`),
 }
 
 export interface QualityProfileVersionSummary {
   uid: string
   version: number
-  change_axis: QualityAxis
+  changed_axes: QualityAxis[]
   validation: { state: ValidationState }
   note: string
   applied_at: string | null
   created_by: { id: number; display_name: string } | null
-}
-
-export const qualityProfileApi = {
-  listVersions: (axis?: QualityAxis) => {
-    const query = axis ? `?axis=${axis}&page=1&limit=20` : '?page=1&limit=20'
-    return apiRequest<{ ok: true; results: QualityProfileVersionSummary[] }>(`${BASE}/quality-profile/versions/${query}`)
-  },
 }
 
 export interface EvaluationDatasetItem {
@@ -235,7 +218,7 @@ export const evaluationDatasetApi = {
 }
 
 export const evaluationRunApi = {
-  startRetrieval: (expectedRevision: number, datasetUid: string) => apiRequest<{ ok: true; run: EvaluationRun }>(`${BASE}/retrieval-profile/evaluate/`, {
+  startRetrieval: (expectedRevision: number, datasetUid: string) => apiRequest<{ ok: true; run: EvaluationRun }>(`${BASE}/quality-profile/evaluate/`, {
     method: 'POST',
     json: { expected_revision: expectedRevision, dataset_uid: datasetUid },
   }),

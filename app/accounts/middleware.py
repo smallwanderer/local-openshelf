@@ -34,7 +34,7 @@ class LocalProfileMiddleware:
         return await self.get_response(request)
 
     def _prepare_local_profile(self, request):
-        # Internal service-to-service calls (dotori-document query embedding
+        # Internal service-to-service calls (embedding-executor query embedding
         # proxy, etc.) have no browser session and shouldn't provision/log in
         # a local profile on every call.
         if "/internal/" in request.path:

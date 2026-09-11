@@ -108,6 +108,7 @@ def load_embedding_catalog() -> list[EmbeddingCatalogEntry]:
                 priority=profile.priority,
                 presets=profile.presets,
                 languages=model.languages,
+                footprint=model.footprint,
             )
         )
     return sorted(resolved, key=lambda item: item.priority, reverse=True)

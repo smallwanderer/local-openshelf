@@ -11,7 +11,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from .admission import AdmissionRejected, EmbeddingPriorityAdmission
-from .embeding_models import embed_document, embed_documents, embed_query
+from .providers.base import EmbeddingBusyError
+from . import embeding_models
 from .registry import get_embedding_provider
 from document_ai.services.embedding_runtime_config import get_active_embedding_runtime
 
@@ -194,6 +195,44 @@ def _token_is_valid(request) -> bool:
     return request.headers.get("Authorization", "") == f"Bearer {expected}"
 
 
+def run_embedding_with_admission(
+    input_type: str,
+    *,
+    text: str | None = None,
+    texts: list[str] | None = None,
+    max_length: int | None = None,
+    **provider_kwargs,
+):
+    """Run one model operation through the process-wide priority admission.
+
+    Both the public internal `/embed/` handler and durable document executor
+    work call this function. Keeping it here preserves the existing singleton
+    and prevents a model-process job from bypassing query priority.
+    """
+
+    from .inference_context import admitted
+    try:
+        lease = _EMBED_ADMISSION.acquire(input_type, timeout=_EMBED_QUEUE_TIMEOUT)
+    except AdmissionRejected as exc:
+        raise EmbeddingBusyError(
+            f"embedding service is busy ({exc.reason})",
+            retry_after_seconds=float(os.getenv("EMBEDDING_BUSY_RETRY_AFTER_SECONDS", "5")),
+        ) from exc
+    token = admitted.set(True)
+    try:
+        if texts is not None:
+            return embeding_models.embed_documents(texts, max_length=max_length, **provider_kwargs)
+        embed_fn = (
+            embeding_models.embed_query
+            if input_type == "query"
+            else embeding_models.embed_document
+        )
+        return [embed_fn(text or "", max_length=max_length, **provider_kwargs)]
+    finally:
+        admitted.reset(token)
+        lease.release()
+
+
 @csrf_exempt
 @require_POST
 def embed(request):
@@ -248,19 +287,22 @@ def embed(request):
 
     # model_name/backend are deliberately not accepted from the caller -- this
     # endpoint always uses the server's own active embedding runtime, so app
-    # and dotori-document can never race on which model/generation to use.
+    # and embedding-executor can never race on which model/generation to use.
     try:
         # A batch is admitted as ONE "document" job -- a single lease covers
         # the whole model.encode() call no matter how many texts it holds.
-        admission_lease = _EMBED_ADMISSION.acquire(
-            input_type, timeout=_EMBED_QUEUE_TIMEOUT
+        results = run_embedding_with_admission(
+            input_type,
+            text=None if is_batch else text,
+            texts=texts if is_batch else None,
+            max_length=max_length,
         )
-    except AdmissionRejected as exc:
+    except EmbeddingBusyError as exc:
         queue_state = _EMBED_ADMISSION.snapshot()
         logger.warning(
             "Embedding admission rejected: input_type=%s reason=%s state=%s",
             input_type,
-            exc.reason,
+            str(exc),
             queue_state,
         )
         response = JsonResponse(
@@ -269,7 +311,7 @@ def embed(request):
                 "error": {
                     "code": "EMBEDDING_BUSY",
                     "message": "Embedding service is busy.",
-                    "details": {"reason": exc.reason},
+                    "details": {"reason": str(exc).rsplit("(", 1)[-1].rstrip(")")},
                 },
             },
             status=503,
@@ -277,17 +319,9 @@ def embed(request):
         response["Retry-After"] = os.getenv("EMBEDDING_BUSY_RETRY_AFTER_SECONDS", "5")
         return response
 
-    try:
-        if is_batch:
-            results = embed_documents(texts, max_length=max_length)
-        else:
-            embed_fn = embed_query if input_type == "query" else embed_document
-            results = [embed_fn(text, max_length=max_length)]
     except Exception:
         logger.exception("Internal %s embedding failed", input_type)
         return JsonResponse({"error": "embedding failed"}, status=500)
-    finally:
-        admission_lease.release()
 
     runtime = get_active_embedding_runtime()
     for result in results:

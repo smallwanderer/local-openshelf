@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _MODEL_CACHE: Dict[str, Any] = {}
 
 # torch (~500MB RSS just to import) is deferred to first actual use instead of
-# module import time. Only the process that owns the model (dotori-document's
+# module import time. Only the process that owns the model (embedding-executor's
 # gunicorn worker, gated by DOTORI_EMBEDDING_MODEL_PROCESS) ever calls
 # get_bgem3_model()/_embed(); every other process that merely imports this
 # module for validate_text()/normalize_sparse_vector() etc. must not pay for

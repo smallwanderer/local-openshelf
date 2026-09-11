@@ -4,12 +4,17 @@ from dataclasses import replace
 import pytest
 
 from installation.deployment import (
+    ALL_WORKER_SERVICES,
     CORE_SERVICES,
     DeploymentPlan,
+    DOCUMENT_QUEUE_SERVICES,
+    DOCUMENT_RUNTIME_RESTART_SERVICES,
     WorkerSpec,
     build_deployment_plan,
     compose_up_command,
+    embedding_runtime_change_command,
     read_deployment_plan,
+    worker_services_for_lifecycle,
     write_deployment_plan,
 )
 from llm_installation.runtime_lifecycle import build_runtime_spec
@@ -44,6 +49,22 @@ def test_maintenance_rebuild_command_builds_and_recreates():
     )
 
 
+def test_embedding_runtime_change_uses_one_off_model_owner_with_writable_config():
+    command = embedding_runtime_change_command(
+        "docker compose -f docker-compose.yml",
+        scope="production",
+        priority_preset="quality",
+    )
+
+    assert command == (
+        "docker compose -f docker-compose.yml run --rm "
+        "-e DOTORI_EMBEDDING_MODEL_PROCESS=1 "
+        "-v ./data/config:/data/config "
+        "-v ./app:/app "
+        "embedding-executor python manage.py change_embedding_runtime "
+        "--scope production --preset quality --activate"
+    )
+
 def _runtime(tmp_path, scope="production"):
     return build_runtime_spec(
         scope,
@@ -60,11 +81,11 @@ def _runtime(tmp_path, scope="production"):
         (
             "basic",
             (),
-            ("dotori-document",),
+            ALL_WORKER_SERVICES,
         ),
         (
             "search",
-            ("dotori-document",),
+            ALL_WORKER_SERVICES,
             (),
         ),
     ],
@@ -78,14 +99,56 @@ def test_plan_selects_workers_for_non_rag_modes(mode, enabled, disabled):
     assert plan.runtime is None
 
 
-def test_rag_plan_keeps_only_the_document_processing_worker(tmp_path):
+def test_rag_plan_keeps_the_complete_document_processing_topology(tmp_path):
     pending = build_deployment_plan("1")
     active = build_deployment_plan("rag", runtime=_runtime(tmp_path))
 
-    assert pending.enabled_services == (*CORE_SERVICES, "dotori-document")
-    assert active.enabled_services == (*CORE_SERVICES, "dotori-document")
+    assert pending.enabled_services == (*CORE_SERVICES, *ALL_WORKER_SERVICES)
+    assert active.enabled_services == (*CORE_SERVICES, *ALL_WORKER_SERVICES)
     assert active.runtime is not None
     assert active.runtime.scope == active.scope
+
+
+def test_document_processing_specs_match_compose_roles():
+    plan = build_deployment_plan("search")
+    specs = {worker.compose_service: worker for worker in plan.workers}
+
+    assert tuple(specs) == ALL_WORKER_SERVICES
+    assert specs["embedding-executor"].queues == ()
+    assert specs["embedding-executor"].health_strategy == "http-readyz"
+    assert specs["parser-executor"].queues == ()
+    assert specs["parser-executor"].health_strategy == "http-readyz"
+    assert specs["dotori-orchestrator"].queues == ("parse", "embed")
+    assert specs["dotori-orchestrator"].health_strategy == "celery-ping"
+
+
+def test_document_runtime_lifecycle_constants_cover_all_services():
+    assert DOCUMENT_QUEUE_SERVICES == ("dotori-orchestrator",)
+    assert DOCUMENT_RUNTIME_RESTART_SERVICES == ("app", *ALL_WORKER_SERVICES)
+
+
+def test_old_saved_plan_cannot_omit_current_workers_from_lifecycle():
+    old_plan = {
+        "workers": [
+            {
+                "compose_service": "dotori-document",
+                "enabled": True,
+            }
+        ]
+    }
+
+    assert worker_services_for_lifecycle(old_plan) == ALL_WORKER_SERVICES
+
+
+def test_lifecycle_ignores_removed_legacy_service_names():
+    saved_plan = {
+        "workers": [
+            {"compose_service": "legacy-document-worker", "enabled": True},
+            {"compose_service": "disabled-worker", "enabled": False},
+        ]
+    }
+
+    assert worker_services_for_lifecycle(saved_plan) == ALL_WORKER_SERVICES
 
 
 def test_plan_rejects_runtime_from_another_scope(tmp_path):

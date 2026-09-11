@@ -15,7 +15,7 @@ from document_ai.embedding import embeding_models
 from document_ai.embedding.embeding_models import EmbeddingResult
 from document_ai.embedding.store_registry import get_embedding_store_instance
 from document_ai.parsers import config
-from document_ai.processing import embedding as embedding_processing
+from document_ai.embedding import executor as embedding_processing
 
 
 def test_chunk_token_budget_is_embedding_budget_minus_headroom(settings):
@@ -261,14 +261,14 @@ def test_registry_returns_remote_provider_outside_model_process(monkeypatch):
     assert provider.spec.model_name == "BAAI/bge-m3"
 
 
-def test_registry_treats_celery_process_in_embedding_worker_as_remote(monkeypatch):
-    # dotori-document's own Celery process does NOT set
+def test_registry_treats_embedding_consumer_as_remote(monkeypatch):
+    # embedding-executor-consumer does NOT set
     # DOTORI_EMBEDDING_MODEL_PROCESS (only its gunicorn process does), so it
     # must also proxy through /embed/ rather than loading its own copy.
     from document_ai.embedding import registry
     from document_ai.embedding.providers.remote import RemoteBGEM3Provider
 
-    monkeypatch.setenv("SERVICE_NAME", "dotori-document")
+    monkeypatch.setenv("SERVICE_NAME", "embedding-executor-consumer")
     monkeypatch.delenv("DOTORI_EMBEDDING_MODEL_PROCESS", raising=False)
     monkeypatch.setattr(registry, "get_active_embedding_runtime", _fake_active_runtime)
 
@@ -277,7 +277,7 @@ def test_registry_treats_celery_process_in_embedding_worker_as_remote(monkeypatc
     assert isinstance(provider, RemoteBGEM3Provider)
 
 
-def test_remote_provider_embed_query_calls_embedding_worker(monkeypatch, settings):
+def test_remote_provider_embed_query_calls_embedding_executor(monkeypatch, settings):
     from document_ai.embedding.providers.remote import RemoteBGEM3Provider
 
     settings.EMBEDDING_INTERNAL_TOKEN = "test-token"
@@ -316,9 +316,10 @@ def test_remote_provider_embed_query_calls_embedding_worker(monkeypatch, setting
     assert captured["json"] == {"input_type": "query", "text": "텍스트 검색", "max_length": 32}
     assert captured["headers"]["Authorization"] == "Bearer test-token"
     assert captured["url"].endswith("/embed/")
+    assert captured["timeout"] == 60.0
 
 
-def test_remote_provider_embed_document_calls_embedding_worker(monkeypatch, settings):
+def test_remote_provider_embed_document_calls_embedding_executor(monkeypatch, settings):
     from document_ai.embedding.providers.remote import RemoteBGEM3Provider
 
     settings.EMBEDDING_INTERNAL_TOKEN = "test-token"
@@ -407,7 +408,7 @@ def test_internal_embed_view_returns_vector_for_query(client, monkeypatch, setti
             dimension=1024,
         )
 
-    monkeypatch.setattr(internal_views, "embed_query", fake_embed_query)
+    monkeypatch.setattr(embeding_models, "embed_query", fake_embed_query)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     response = client.post(
@@ -436,7 +437,7 @@ def test_internal_embed_view_routes_document_input_type(client, monkeypatch, set
         calls.append(text)
         return EmbeddingResult(dense_vector=[0.1] * 1024, sparse_vector={}, dimension=1024)
 
-    monkeypatch.setattr(internal_views, "embed_document", fake_embed_document)
+    monkeypatch.setattr(embeding_models, "embed_document", fake_embed_document)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     response = client.post(
@@ -533,7 +534,7 @@ def test_internal_embed_view_surfaces_failure_generically(client, monkeypatch, s
     def failing_embed_query(text, **kwargs):
         raise RuntimeError("GPU OOM at address 0x1234, model=/secret/path")
 
-    monkeypatch.setattr(internal_views, "embed_query", failing_embed_query)
+    monkeypatch.setattr(embeding_models, "embed_query", failing_embed_query)
 
     response = client.post(
         "/embed/",
@@ -588,7 +589,7 @@ def test_internal_embed_view_allows_configured_concurrency(client, monkeypatch, 
     def fake_embed_query(text, *, max_length=None):
         return EmbeddingResult(dense_vector=[0.1] * 1024, sparse_vector={}, dimension=1024)
 
-    monkeypatch.setattr(internal_views, "embed_query", fake_embed_query)
+    monkeypatch.setattr(embeding_models, "embed_query", fake_embed_query)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     admission = EmbeddingPriorityAdmission(
@@ -619,7 +620,7 @@ def test_internal_embed_view_rejects_dimension_mismatch(client, monkeypatch, set
     def fake_embed_query(text, *, max_length=None):
         return EmbeddingResult(dense_vector=[0.1, 0.2], sparse_vector={}, dimension=2)
 
-    monkeypatch.setattr(internal_views, "embed_query", fake_embed_query)
+    monkeypatch.setattr(embeding_models, "embed_query", fake_embed_query)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     response = client.post(
@@ -686,7 +687,7 @@ def test_bgem3_embed_documents_batch_applies_document_prefix(monkeypatch):
     assert seen_texts == ["passage: a", "passage: b"]
 
 
-def test_remote_provider_embed_documents_calls_embedding_worker_once(monkeypatch, settings):
+def test_remote_provider_embed_documents_calls_embedding_executor_once(monkeypatch, settings):
     from document_ai.embedding.providers.remote import RemoteBGEM3Provider
 
     settings.EMBEDDING_INTERNAL_TOKEN = "test-token"
@@ -710,6 +711,7 @@ def test_remote_provider_embed_documents_calls_embedding_worker_once(monkeypatch
 
     def fake_post(url, *, json, headers, timeout):
         captured["json"] = json
+        captured["timeout"] = timeout
         return FakeResponse()
 
     monkeypatch.setattr("document_ai.embedding.providers.remote.requests.post", fake_post)
@@ -717,6 +719,7 @@ def test_remote_provider_embed_documents_calls_embedding_worker_once(monkeypatch
     results = provider.embed_documents(["chunk one", "chunk two"], max_length=64)
 
     assert captured["json"] == {"input_type": "document", "texts": ["chunk one", "chunk two"], "max_length": 64}
+    assert captured["timeout"] == 180.0
     assert [r.dense_vector for r in results] == [[0.1], [0.2]]
     assert [r.sparse_vector for r in results] == [{"1": 0.5}, {"2": 0.6}]
 
@@ -755,7 +758,7 @@ def test_internal_embed_view_batch_returns_results_for_each_text(client, monkeyp
             for _ in texts
         ]
 
-    monkeypatch.setattr(internal_views, "embed_documents", fake_embed_documents)
+    monkeypatch.setattr(embeding_models, "embed_documents", fake_embed_documents)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     response = client.post(
@@ -823,7 +826,7 @@ def test_internal_embed_view_batch_acquires_admission_once(client, monkeypatch, 
     def fake_embed_documents(texts, *, max_length=None):
         return [EmbeddingResult(dense_vector=[0.1] * 1024, sparse_vector={}, dimension=1024) for _ in texts]
 
-    monkeypatch.setattr(internal_views, "embed_documents", fake_embed_documents)
+    monkeypatch.setattr(embeding_models, "embed_documents", fake_embed_documents)
     monkeypatch.setattr(internal_views, "get_active_embedding_runtime", _fake_active_runtime)
 
     response = client.post(

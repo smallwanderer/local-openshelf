@@ -5,7 +5,7 @@ class VectorSearchRequestSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(
         choices=["basic", "advanced"],
         default="advanced",
-        help_text="basic은 입력 질의를 직접 검색하고 advanced는 query-understanding을 적용합니다.",
+        help_text="두 값 모두 입력 질의를 직접 검색합니다 (advanced의 query-understanding 파이프라인은 평가 후 폐기됨).",
     )
     query = serializers.CharField(
         required=True, 

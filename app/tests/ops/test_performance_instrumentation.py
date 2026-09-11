@@ -11,7 +11,7 @@ from config.enums import AIStatus, NodeType
 from config.tracing import get_trace_id, new_trace_id, set_trace_id
 from document_ai.db_span import capture_db_spans
 from document_ai.models import DocumentChunk, DocumentParseResult, RAGJob, SearchJob
-from document_ai.processing.embedding import (
+from document_ai.embedding.executor import (
     RetryableEmbeddingError,
     embed_document_chunk_sync,
     embed_document_chunks_batch_sync,
@@ -36,7 +36,7 @@ class EmbeddingInstrumentationTests(TestCase):
         node = Node.objects.create(
             owner=self.user, name="doc.txt", ext=".txt", node_type=NodeType.FILE
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=node,
                 original_name="doc.txt",
@@ -169,7 +169,7 @@ class EmbeddingInstrumentationTests(TestCase):
         chunk_b = self._create_chunk(chunk_index=1, text="chunk b")
 
         def failing_embed_documents(texts, **kwargs):
-            raise RuntimeError("dotori-document is busy (EMBEDDING_BUSY), retry after 5s")
+            raise RuntimeError("embedding-executor is busy (EMBEDDING_BUSY), retry after 5s")
 
         with patch(
             "document_ai.embedding.embeding_models.embed_documents", failing_embed_documents
@@ -224,7 +224,7 @@ class ParseInstrumentationTests(TestCase):
         node = Node.objects.create(
             owner=self.user, name="parse-me.txt", ext=".txt", node_type=NodeType.FILE
         )
-        with patch("document_ai.signals.parse_document_with_docling.delay"):
+        with patch("document_ai.signals.enqueue_parse"):
             FileBlob.objects.create(
                 node=node,
                 original_name="parse-me.txt",
@@ -236,7 +236,7 @@ class ParseInstrumentationTests(TestCase):
         return node
 
     def test_success_path_records_metrics_on_parse_result(self):
-        from document_ai.tasks import parse_document_with_docling
+        from document_ai.processing.parsing import execute_parse_node
 
         node = self._create_file_node()
         fake_parse_result = SimpleNamespace(
@@ -254,16 +254,13 @@ class ParseInstrumentationTests(TestCase):
             file_ext=".txt",
         )
 
-        with patch(
-            "document_ai.parsers.docling_parser.parse_document_entry",
-            return_value=fake_parse_result,
-        ), patch("document_ai.tasks.enqueue_embedding_tasks.delay") as enqueue_delay:
-            result = parse_document_with_docling(
-                node.id, **enqueue_kwargs()
-            )
+        parser = SimpleNamespace(
+            spec=SimpleNamespace(backend="docling"),
+            parse=lambda _path: fake_parse_result,
+        )
+        result = execute_parse_node(node.id, parser=parser, **enqueue_kwargs())
 
         self.assertEqual(result["status"], "success")
-        enqueue_delay.assert_called_once()
         node.parse_result.refresh_from_db()
         metrics = node.parse_result.performance_metrics
         self.assertIn("trace_id", metrics)
@@ -271,17 +268,17 @@ class ParseInstrumentationTests(TestCase):
         self.assertIn("parse_processing_ms", metrics)
 
     def test_failure_path_records_metrics_on_parse_result(self):
-        from document_ai.tasks import parse_document_with_docling
+        from document_ai.processing.parsing import ParseExecutionFailed, execute_parse_node
 
         node = self._create_file_node()
 
-        with patch(
-            "document_ai.parsers.docling_parser.parse_document_entry",
-            side_effect=ValueError("boom"),
-        ):
-            result = parse_document_with_docling(node.id, **enqueue_kwargs())
+        parser = SimpleNamespace(
+            spec=SimpleNamespace(backend="docling"),
+            parse=lambda _path: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        with self.assertRaises(ParseExecutionFailed):
+            execute_parse_node(node.id, parser=parser, **enqueue_kwargs())
 
-        self.assertEqual(result["status"], "failed")
         node.parse_result.refresh_from_db()
         metrics = node.parse_result.performance_metrics
         self.assertTrue(metrics.get("failed"))

@@ -132,7 +132,18 @@ def embed_query(
     backend: str | None = None,
     runtime: EmbeddingRuntimeSnapshot | None = None,
 ) -> EmbeddingResult:
+    from .registry import _is_embedding_model_process
+    from .inference_context import admitted
+
+    if _is_embedding_model_process() and not admitted.get():
+        from .internal_views import run_embedding_with_admission
+        return run_embedding_with_admission(
+            "query", text=query, model_name=model_name, backend=backend,
+            runtime=runtime, max_length=max_length,
+        )[0]
     resolved_max_length = max_length or getattr(settings, "SEARCH_QUERY_EMBEDDING_MAX_TOKENS", None)
+    if resolved_max_length is not None:
+        resolved_max_length = min(resolved_max_length, get_embedding_max_tokens())
     resolved_backend = backend or (
         runtime.provider if runtime else get_embedding_backend()
     )

@@ -9,5 +9,9 @@
   "tokenizer_revision": "main000",
   "dimension": 1536,
   "model_input_max_tokens": 8192,
-  "languages": ["ko", "en", "zh", "ja", "multilingual"]
+  "languages": ["ko", "en", "zh", "ja", "multilingual"],
+  "footprint": {
+    "parameter_count_m": 1540,
+    "peak_activation_mb": 0
+  }
 }

@@ -59,7 +59,7 @@ def build_embedding_summary(operation_mode: str, *, probe: bool = False) -> dict
     status_name = "configured" if enabled else "disabled"
     reason_code = ""
     if enabled and probe:
-        service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://dotori-document:8001").rstrip("/")
+        service_url = os.getenv("EMBEDDING_SERVICE_URL", "http://embedding-executor:8001").rstrip("/")
         try:
             response = requests.get(f"{service_url}/readyz", timeout=2)
             available = response.ok

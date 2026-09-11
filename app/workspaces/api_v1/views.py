@@ -304,12 +304,12 @@ def decline_invite(request, invitation_id):
 @workspace_member_required
 @email_verification_required
 @require_http_methods(["GET"])
-def retrieval_profile(request):
-    from document_ai.search.profiles import retrieval_profile_envelope
+def quality_profile(request):
+    from document_ai.search.quality_profile import quality_profile_envelope
 
     can_edit = request.workspace_membership.role == WorkspaceMembership.ROLE_ADMIN
     return JsonResponse(
-        retrieval_profile_envelope(
+        quality_profile_envelope(
             request.workspace,
             actor=request.user,
             can_edit=can_edit,
@@ -320,19 +320,21 @@ def retrieval_profile(request):
 @workspace_admin_required
 @email_verification_required
 @require_http_methods(["PATCH"])
-def retrieval_profile_draft(request):
-    from document_ai.search.profiles import RetrievalProfileError, save_retrieval_draft
+def quality_profile_draft(request):
+    from document_ai.search.profiles import RetrievalProfileError
+    from document_ai.search.quality_profile import save_quality_profile_draft
 
     payload = _json_object(request)
     if payload is None:
         return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
     try:
-        result = save_retrieval_draft(
+        result = save_quality_profile_draft(
             request.workspace,
             actor=request.user,
             expected_revision=payload.get("expected_revision"),
-            overrides=payload.get("overrides", {}),
-            reset_fields=payload.get("reset_fields", []),
+            retrieval=payload.get("retrieval"),
+            generation=payload.get("generation"),
+            prompt_policy=payload.get("prompt_policy"),
             note=payload.get("note", ""),
         )
     except RetrievalProfileError as exc:
@@ -343,14 +345,15 @@ def retrieval_profile_draft(request):
 @workspace_admin_required
 @email_verification_required
 @require_http_methods(["POST"])
-def retrieval_profile_draft_discard(request):
-    from document_ai.search.profiles import RetrievalProfileError, discard_retrieval_draft
+def quality_profile_draft_discard(request):
+    from document_ai.search.profiles import RetrievalProfileError
+    from document_ai.search.quality_profile import discard_quality_profile_draft
 
     payload = _json_object(request)
     if payload is None:
         return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
     try:
-        result = discard_retrieval_draft(
+        result = discard_quality_profile_draft(
             request.workspace,
             expected_revision=payload.get("expected_revision"),
         )
@@ -362,14 +365,36 @@ def retrieval_profile_draft_discard(request):
 @workspace_admin_required
 @email_verification_required
 @require_http_methods(["POST"])
-def retrieval_profile_apply(request):
-    from document_ai.search.profiles import RetrievalProfileError, apply_retrieval_draft
+def quality_profile_draft_preview_prompt(request):
+    from document_ai.search.profiles import RetrievalProfileError
+    from document_ai.search.quality_profile import preview_prompt_draft
 
     payload = _json_object(request)
     if payload is None:
         return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
     try:
-        result = apply_retrieval_draft(
+        result = preview_prompt_draft(
+            request.workspace,
+            expected_revision=payload.get("expected_revision"),
+            route=payload.get("route"),
+        )
+    except RetrievalProfileError as exc:
+        return _retrieval_profile_error_response(exc)
+    return JsonResponse(result)
+
+
+@workspace_admin_required
+@email_verification_required
+@require_http_methods(["POST"])
+def quality_profile_apply(request):
+    from document_ai.search.profiles import RetrievalProfileError
+    from document_ai.search.quality_profile import apply_quality_profile_draft
+
+    payload = _json_object(request)
+    if payload is None:
+        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
+    try:
+        result = apply_quality_profile_draft(
             request.workspace,
             actor=request.user,
             expected_revision=payload.get("expected_revision"),
@@ -428,7 +453,7 @@ def evaluation_run_detail(request, run_uid):
 @workspace_admin_required
 @email_verification_required
 @require_http_methods(["POST"])
-def retrieval_profile_evaluate(request):
+def quality_profile_evaluate(request):
     from document_ai.search.evaluation import start_retrieval_evaluation
     from document_ai.search.profiles import RetrievalProfileError
 
@@ -447,201 +472,70 @@ def retrieval_profile_evaluate(request):
     return JsonResponse(result, status=202)
 
 
+def _serialize_llm_settings(workspace, *, can_edit):
+    from document_ai.services.llm_endpoint_service import (
+        get_effective_rag_target,
+        get_or_create_llm_preference,
+        get_server_rag_default_model,
+    )
+
+    preference = get_or_create_llm_preference(workspace)
+    endpoints = workspace.llm_endpoints.filter(is_active=True).order_by("name")
+    return {
+        "ok": True,
+        "endpoints": [
+            {
+                "id": endpoint.id,
+                "name": endpoint.name,
+                "endpoint_type": endpoint.endpoint_type,
+                "endpoint_type_label": endpoint.get_endpoint_type_display(),
+                "default_model": endpoint.default_model,
+            }
+            for endpoint in endpoints
+        ],
+        "active": get_effective_rag_target(preference),
+        "selected_endpoint_id": preference.rag_endpoint_id,
+        "server_default_model": get_server_rag_default_model(),
+        "can_edit": can_edit,
+    }
+
+
 @workspace_member_required
 @email_verification_required
 @require_http_methods(["GET"])
-def generation_profile(request):
-    from document_ai.search.profiles import generation_profile_envelope
-
+def llm_settings(request):
     can_edit = request.workspace_membership.role == WorkspaceMembership.ROLE_ADMIN
-    return JsonResponse(
-        generation_profile_envelope(
-            request.workspace,
-            actor=request.user,
-            can_edit=can_edit,
-        )
-    )
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["PATCH"])
-def generation_profile_draft(request):
-    from document_ai.search.profiles import RetrievalProfileError, save_generation_draft
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = save_generation_draft(
-            request.workspace,
-            actor=request.user,
-            expected_revision=payload.get("expected_revision"),
-            overrides=payload.get("overrides", {}),
-            reset_fields=payload.get("reset_fields", []),
-            note=payload.get("note", ""),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
+    return JsonResponse(_serialize_llm_settings(request.workspace, can_edit=can_edit))
 
 
 @workspace_admin_required
 @email_verification_required
 @require_http_methods(["POST"])
-def generation_profile_draft_discard(request):
-    from document_ai.search.profiles import RetrievalProfileError, discard_generation_draft
+def llm_settings_select(request):
+    from document_ai.services.llm_endpoint_service import set_user_rag_model
 
     payload = _json_object(request)
     if payload is None:
         return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = discard_generation_draft(
-            request.workspace,
-            expected_revision=payload.get("expected_revision"),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["POST"])
-def generation_profile_apply(request):
-    from document_ai.search.profiles import RetrievalProfileError, apply_generation_draft
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = apply_generation_draft(
-            request.workspace,
-            actor=request.user,
-            expected_revision=payload.get("expected_revision"),
-            evaluation_run_uid=payload.get("evaluation_run_uid"),
-            allow_unverified=payload.get("allow_unverified", False),
-            note=payload.get("note", ""),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
+    endpoint_id = payload.get("endpoint_id")
+    if endpoint_id is not None:
+        try:
+            endpoint_id = int(endpoint_id)
+        except (TypeError, ValueError):
+            return api_error_response("INVALID_REQUEST", "endpoint_id must be an integer or null.", status=400)
+    set_user_rag_model(workspace=request.workspace, owner=request.user, endpoint_id=endpoint_id, rag_model="")
+    return JsonResponse(_serialize_llm_settings(request.workspace, can_edit=True))
 
 
 @workspace_member_required
 @email_verification_required
 @require_http_methods(["GET"])
 def quality_profile_versions(request):
-    from document_ai.search.profiles import list_quality_profile_versions
+    from document_ai.search.quality_profile import list_quality_profile_versions
 
     try:
         page = int(request.GET.get("page", 1))
         limit = min(int(request.GET.get("limit", 20)), 100)
     except ValueError:
         return api_error_response("INVALID_REQUEST", "page and limit must be integers.", status=400)
-    axis = request.GET.get("axis") or None
-    return JsonResponse(list_quality_profile_versions(request.workspace, axis=axis, page=page, limit=limit))
-
-
-@workspace_member_required
-@email_verification_required
-@require_http_methods(["GET"])
-def system_prompt_profile(request):
-    from document_ai.rag.prompt_profiles import prompt_profile_envelope
-
-    can_edit = request.workspace_membership.role == WorkspaceMembership.ROLE_ADMIN
-    return JsonResponse(
-        prompt_profile_envelope(
-            request.workspace,
-            actor=request.user,
-            can_edit=can_edit,
-        )
-    )
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["PATCH"])
-def system_prompt_draft(request):
-    from document_ai.rag.prompt_profiles import save_prompt_draft
-    from document_ai.search.profiles import RetrievalProfileError
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = save_prompt_draft(
-            request.workspace,
-            actor=request.user,
-            expected_revision=payload.get("expected_revision"),
-            overrides=payload.get("overrides", {}),
-            note=payload.get("note", ""),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["POST"])
-def system_prompt_draft_discard(request):
-    from document_ai.rag.prompt_profiles import discard_prompt_draft
-    from document_ai.search.profiles import RetrievalProfileError
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = discard_prompt_draft(
-            request.workspace,
-            expected_revision=payload.get("expected_revision"),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["POST"])
-def system_prompt_draft_preview(request):
-    from document_ai.rag.prompt_profiles import preview_prompt_draft
-    from document_ai.search.profiles import RetrievalProfileError
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = preview_prompt_draft(
-            request.workspace,
-            expected_revision=payload.get("expected_revision"),
-            route=payload.get("route"),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
-
-
-@workspace_admin_required
-@email_verification_required
-@require_http_methods(["POST"])
-def system_prompt_apply(request):
-    from document_ai.rag.prompt_profiles import apply_prompt_draft
-    from document_ai.search.profiles import RetrievalProfileError
-
-    payload = _json_object(request)
-    if payload is None:
-        return api_error_response("INVALID_REQUEST", "Expected a JSON object.", status=400)
-    try:
-        result = apply_prompt_draft(
-            request.workspace,
-            actor=request.user,
-            expected_revision=payload.get("expected_revision"),
-            evaluation_run_uid=payload.get("evaluation_run_uid"),
-            allow_unverified=payload.get("allow_unverified", False),
-            note=payload.get("note", ""),
-        )
-    except RetrievalProfileError as exc:
-        return _retrieval_profile_error_response(exc)
-    return JsonResponse(result)
+    return JsonResponse(list_quality_profile_versions(request.workspace, page=page, limit=limit))

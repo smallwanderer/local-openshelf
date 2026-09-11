@@ -59,7 +59,9 @@ def purge_expired_trash(workspace):
 
 
 def _with_file_relations(qs):
-    return qs.select_related("parent", "blob", "parse_result").prefetch_related("parse_result__chunks")
+    return qs.select_related("parent", "blob", "parse_result").prefetch_related(
+        "parse_result__chunks",
+    )
 
 def get_workspace_files(workspace, q=None, parent_id=None, tag=None):
     qs = Node.objects.filter(workspace=workspace, trashed=False).order_by("-created_at")

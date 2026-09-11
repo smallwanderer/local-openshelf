@@ -82,6 +82,7 @@ def ai_search_history(request):
 
     history_list = RAGJob.objects.filter(
         workspace=request.workspace,
+        owner=request.user,
         status="completed"
     ).order_by("-completed_at").select_related("search_job")
 
